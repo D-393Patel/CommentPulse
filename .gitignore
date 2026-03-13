@@ -1,6 +1,27 @@
+# --- Security & Secrets ---
+.env
+*.pem
+
+# --- Data & Models (Managed by DVC) ---
 /raw
 /interim
 data/*
-/lgbm_model.pkl
-/tfidf_vectorizer.pkl
-/experiment_info.json
+!data/.gitkeep
+lgbm_model.pkl
+tfidf_vectorizer.pkl
+experiment_info.json
+
+# --- Python & Environment ---
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- IDE & OS ---
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- DVC Meta-files ---
+*.dvc

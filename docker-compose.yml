@@ -1,0 +1,25 @@
+services:
+  web:
+    build: .
+    # Use the env_file directive to explicitly point to your .env
+    env_file:
+      - .env
+    # Expose the API port
+    ports:
+      - "5000:5000"
+    # Map the entire project directory to /app
+    volumes:
+      - .:/app
+    # Ensure the container environment sees the project folder
+    environment:
+      - PYTHONPATH=/app
+    # Set the working directory to match your volume mapping
+    working_dir: /app
+    # Run the application using the correct path to main.py
+    command: python flask_api/main.py
+    # Optional: Add a healthcheck to ensure Docker knows if the API is actually alive
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

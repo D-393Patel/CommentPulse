@@ -1,0 +1,13 @@
+# Exclude folders that are large or not needed
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+venv
+.venv
+dataset
+notebooks
+node_modules

@@ -1,245 +1,422 @@
-// popup.js
+document.addEventListener("DOMContentLoaded", init);
 
-document.addEventListener("DOMContentLoaded", async () => {
-  const outputDiv = document.getElementById("output");
-  const API_KEY = 'AIzaSyDamXLkzWhycMDx1MXis9iocSxm2lFI9tc';  // Replace with your actual YouTube Data API key
-  // const API_URL = 'http://my-elb-2062136355.us-east-1.elb.amazonaws.com:80';   
-  // const API_URL = 'http://localhost:5000/';
-  const API_URL = 'http://localhost:5000/';
+const API = "http://localhost:5000";
 
-  // Get the current tab's URL
-  chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-    const url = tabs[0].url;
-    const youtubeRegex = /^https:\/\/(?:www\.)?youtube\.com\/watch\?v=([\w-]{11})/;
-    const match = url.match(youtubeRegex);
+let comments = [];
+let predictions = [];
 
-    if (match && match[1]) {
-      const videoId = match[1];
-      outputDiv.innerHTML = `<div class="section-title">YouTube Video ID</div><p>${videoId}</p><p>Fetching comments...</p>`;
+async function init() {
 
-      const comments = await fetchComments(videoId);
-      if (comments.length === 0) {
-        outputDiv.innerHTML += "<p>No comments found for this video.</p>";
-        return;
-      }
+  const videoId = await getVideoId();
 
-      outputDiv.innerHTML += `<p>Fetched ${comments.length} comments. Performing sentiment analysis...</p>`;
-      const predictions = await getSentimentPredictions(comments);
+  if (!videoId) {
+    document.getElementById("loading").innerText =
+      "Open a YouTube video";
+    return;
+  }
 
-      if (predictions) {
-        // Process the predictions to get sentiment counts and sentiment data
-        const sentimentCounts = { "1": 0, "0": 0, "-1": 0 };
-        const sentimentData = []; // For trend graph
-        const totalSentimentScore = predictions.reduce((sum, item) => sum + parseInt(item.sentiment), 0);
-        predictions.forEach((item, index) => {
-          sentimentCounts[item.sentiment]++;
-          sentimentData.push({
-            timestamp: item.timestamp,
-            sentiment: parseInt(item.sentiment)
-          });
-        });
+  document.getElementById("loading").innerText =
+    "Loading comments...";
 
-        // Compute metrics
-        const totalComments = comments.length;
-        const uniqueCommenters = new Set(comments.map(comment => comment.authorId)).size;
-        const totalWords = comments.reduce((sum, comment) => sum + comment.text.split(/\s+/).filter(word => word.length > 0).length, 0);
-        const avgWordLength = (totalWords / totalComments).toFixed(2);
-        const avgSentimentScore = (totalSentimentScore / totalComments).toFixed(2);
+  comments = await fetchComments(videoId);
 
-        // Normalize the average sentiment score to a scale of 0 to 10
-        const normalizedSentimentScore = (((parseFloat(avgSentimentScore) + 1) / 2) * 10).toFixed(2);
+  if (!comments.length) {
+    document.getElementById("loading").innerText =
+      "No comments found";
+    return;
+  }
 
-        // Add the Comment Analysis Summary section
-        outputDiv.innerHTML += `
-          <div class="section">
-            <div class="section-title">Comment Analysis Summary</div>
-            <div class="metrics-container">
-              <div class="metric">
-                <div class="metric-title">Total Comments</div>
-                <div class="metric-value">${totalComments}</div>
-              </div>
-              <div class="metric">
-                <div class="metric-title">Unique Commenters</div>
-                <div class="metric-value">${uniqueCommenters}</div>
-              </div>
-              <div class="metric">
-                <div class="metric-title">Avg Comment Length</div>
-                <div class="metric-value">${avgWordLength} words</div>
-              </div>
-              <div class="metric">
-                <div class="metric-title">Avg Sentiment Score</div>
-                <div class="metric-value">${normalizedSentimentScore}/10</div>
-              </div>
-            </div>
-          </div>
-        `;
+  predictions = await fetchPredictions(comments);
 
-        // Add the Sentiment Analysis Results section with a placeholder for the chart
-        outputDiv.innerHTML += `
-          <div class="section">
-            <div class="section-title">Sentiment Analysis Results</div>
-            <p>See the pie chart below for sentiment distribution.</p>
-            <div id="chart-container"></div>
-          </div>`;
+  renderStats();
+  renderComments();
 
-        // Fetch and display the pie chart inside the chart-container div
-        await fetchAndDisplayChart(sentimentCounts);
+  await loadCharts();
 
-        // Add the Sentiment Trend Graph section
-        outputDiv.innerHTML += `
-          <div class="section">
-            <div class="section-title">Sentiment Trend Over Time</div>
-            <div id="trend-graph-container"></div>
-          </div>`;
+  await loadWordCloud();   // ⭐ ADD THIS
+  await loadKeywordChart();
+  await loadTopics();
+  await loadTopicSentiment();
+  await loadInsights();
 
-        // Fetch and display the sentiment trend graph
-        await fetchAndDisplayTrendGraph(sentimentData);
+  document.getElementById("loading").style.display = "none";
+}
 
-        // Add the Word Cloud section
-        outputDiv.innerHTML += `
-          <div class="section">
-            <div class="section-title">Comment Wordcloud</div>
-            <div id="wordcloud-container"></div>
-          </div>`;
 
-        // Fetch and display the word cloud inside the wordcloud-container div
-        await fetchAndDisplayWordCloud(comments.map(comment => comment.text));
+function getVideoId() {
 
-        // Add the top comments section
-        outputDiv.innerHTML += `
-          <div class="section">
-            <div class="section-title">Top 25 Comments with Sentiments</div>
-            <ul class="comment-list">
-              ${predictions.slice(0, 25).map((item, index) => `
-                <li class="comment-item">
-                  <span>${index + 1}. ${item.comment}</span><br>
-                  <span class="comment-sentiment">Sentiment: ${item.sentiment}</span>
-                </li>`).join('')}
-            </ul>
-          </div>`;
-      }
-    } else {
-      outputDiv.innerHTML = "<p>This is not a valid YouTube URL.</p>";
-    }
+  return new Promise(resolve => {
+
+    chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+
+      const url = tabs[0]?.url || "";
+      resolve(extractVideoId(url));
+
+    });
+
   });
 
-  async function fetchComments(videoId) {
-    let comments = [];
-    let pageToken = "";
-    try {
-      while (comments.length < 500) {
-        const response = await fetch(`https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId=${videoId}&maxResults=100&pageToken=${pageToken}&key=${API_KEY}`);
-        const data = await response.json();
-        if (data.items) {
-          data.items.forEach(item => {
-            const commentText = item.snippet.topLevelComment.snippet.textOriginal;
-            const timestamp = item.snippet.topLevelComment.snippet.publishedAt;
-            const authorId = item.snippet.topLevelComment.snippet.authorChannelId?.value || 'Unknown';
-            comments.push({ text: commentText, timestamp: timestamp, authorId: authorId });
-          });
-        }
-        pageToken = data.nextPageToken;
-        if (!pageToken) break;
-      }
-    } catch (error) {
-      console.error("Error fetching comments:", error);
-      outputDiv.innerHTML += "<p>Error fetching comments.</p>";
-    }
-    return comments;
+}
+
+
+function extractVideoId(url) {
+
+  const regExp =
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([^&?/]+)/;
+
+  const match = url.match(regExp);
+
+  return match ? match[1] : null;
+
+}
+
+
+async function fetchComments(videoId) {
+
+  try {
+
+    const res = await fetch(
+      `${API}/get_youtube_comments?videoId=${videoId}`
+    );
+
+    const data = await res.json();
+
+    return data.comments || [];
+
+  } catch (err) {
+
+    console.error("Comment fetch error:", err);
+
+    return [];
+
   }
 
-  async function getSentimentPredictions(comments) {
-    try {
-      const response = await fetch(`${API_URL}/predict_with_timestamps`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comments })
-      });
-      const result = await response.json();
-      if (response.ok) {
-        return result; // The result now includes sentiment and timestamp
-      } else {
-        throw new Error(result.error || 'Error fetching predictions');
-      }
-    } catch (error) {
-      console.error("Error fetching predictions:", error);
-      outputDiv.innerHTML += "<p>Error fetching sentiment predictions.</p>";
-      return null;
-    }
+}
+
+
+async function fetchPredictions(comments) {
+
+  try {
+
+    const res = await fetch(`${API}/predict_with_timestamps`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ comments })
+    });
+
+    return await res.json();
+
+  } catch (err) {
+
+    console.error("Prediction error:", err);
+
+    return [];
+
   }
 
-  async function fetchAndDisplayChart(sentimentCounts) {
-    try {
-      const response = await fetch(`${API_URL}/generate_chart`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sentiment_counts: sentimentCounts })
-      });
-      if (!response.ok) {
-        throw new Error('Failed to fetch chart image');
-      }
-      const blob = await response.blob();
-      const imgURL = URL.createObjectURL(blob);
-      const img = document.createElement('img');
-      img.src = imgURL;
-      img.style.width = '100%';
-      img.style.marginTop = '20px';
-      // Append the image to the chart-container div
-      const chartContainer = document.getElementById('chart-container');
-      chartContainer.appendChild(img);
-    } catch (error) {
-      console.error("Error fetching chart image:", error);
-      outputDiv.innerHTML += "<p>Error fetching chart image.</p>";
+}
+
+
+function renderStats() {
+
+  let pos = 0;
+  let neu = 0;
+  let neg = 0;
+
+  predictions.forEach(p => {
+
+    if (p.sentiment === 1) pos++;
+    else if (p.sentiment === 0) neu++;
+    else if (p.sentiment === -1) neg++;
+
+  });
+
+  document.getElementById("positiveCount").innerText = pos;
+  document.getElementById("neutralCount").innerText = neu;
+  document.getElementById("negativeCount").innerText = neg;
+  document.getElementById("totalCount").innerText = predictions.length;
+
+}
+
+
+function renderComments() {
+
+  const list = document.getElementById("commentList");
+
+  list.innerHTML = "";
+
+  predictions.slice(0, 10).forEach(c => {
+
+    const li = document.createElement("li");
+
+    let sentimentText = "Neutral";
+    let sentimentClass = "neutral";
+
+    if (c.sentiment === 1) {
+      sentimentText = "Positive";
+      sentimentClass = "positive";
     }
+
+    if (c.sentiment === -1) {
+      sentimentText = "Negative";
+      sentimentClass = "negative";
+    }
+
+    li.innerHTML = `
+      ${c.comment.substring(0, 120)}...
+      <div class="sentiment ${sentimentClass}">
+        ${sentimentText}
+      </div>
+    `;
+
+    list.appendChild(li);
+
+  });
+
+}
+
+
+async function loadCharts() {
+
+  const counts = { "1": 0, "0": 0, "-1": 0 };
+
+  predictions.forEach(p => {
+
+    const key = String(p.sentiment);
+
+    if (counts[key] !== undefined) counts[key]++;
+
+  });
+
+  try {
+
+    const res = await fetch(`${API}/generate_chart`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sentiment_counts: counts })
+    });
+
+    const blob = await res.blob();
+
+    document.getElementById("sentimentChart").src =
+      URL.createObjectURL(blob);
+
+  } catch (err) {
+
+    console.error("Chart error:", err);
+
   }
 
-  async function fetchAndDisplayWordCloud(comments) {
-    try {
-      const response = await fetch(`${API_URL}/generate_wordcloud`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comments })
-      });
-      if (!response.ok) {
-        throw new Error('Failed to fetch word cloud image');
-      }
-      const blob = await response.blob();
-      const imgURL = URL.createObjectURL(blob);
-      const img = document.createElement('img');
-      img.src = imgURL;
-      img.style.width = '100%';
-      img.style.marginTop = '20px';
-      // Append the image to the wordcloud-container div
-      const wordcloudContainer = document.getElementById('wordcloud-container');
-      wordcloudContainer.appendChild(img);
-    } catch (error) {
-      console.error("Error fetching word cloud image:", error);
-      outputDiv.innerHTML += "<p>Error fetching word cloud image.</p>";
+}
+
+
+async function loadTopics() {
+
+  try {
+
+    const res = await fetch(`${API}/extract_topics`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        comments: comments.map(c => c.text)
+      })
+    });
+
+    const data = await res.json();
+
+    const list = document.getElementById("topicList");
+
+    list.innerHTML = "";
+
+    if (!data.topics || data.topics.length === 0) {
+
+      list.innerHTML = "<li>No discussion topics found</li>";
+      return;
+
     }
+
+    data.topics.forEach(t => {
+
+      const li = document.createElement("li");
+
+      // Semantic keyword result
+      if (t.title) {
+
+        li.innerHTML = `
+          <strong>${t.title}</strong>
+        `;
+
+      }
+
+      // TF-IDF fallback result
+      else if (t.keywords) {
+
+        li.innerHTML = `
+          <strong>Topic ${t.topic}</strong><br>
+          ${t.keywords.join(", ")}
+        `;
+
+      }
+
+      list.appendChild(li);
+
+    });
+
+  } catch (err) {
+
+    console.error("Topic error:", err);
+
   }
 
-  async function fetchAndDisplayTrendGraph(sentimentData) {
-    try {
-      const response = await fetch(`${API_URL}/generate_trend_graph`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sentiment_data: sentimentData })
-      });
-      if (!response.ok) {
-        throw new Error('Failed to fetch trend graph image');
-      }
-      const blob = await response.blob();
-      const imgURL = URL.createObjectURL(blob);
-      const img = document.createElement('img');
-      img.src = imgURL;
-      img.style.width = '100%';
-      img.style.marginTop = '20px';
-      // Append the image to the trend-graph-container div
-      const trendGraphContainer = document.getElementById('trend-graph-container');
-      trendGraphContainer.appendChild(img);
-    } catch (error) {
-      console.error("Error fetching trend graph image:", error);
-      outputDiv.innerHTML += "<p>Error fetching trend graph image.</p>";
-    }
+}
+
+
+
+
+async function loadInsights() {
+
+  try {
+
+    const res = await fetch(`${API}/generate_insights`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        comments: comments.map(c => c.text)
+      })
+    });
+
+    const data = await res.json();
+
+    document.getElementById("aiInsights").innerText =
+      data.insights || "No insights generated.";
+
+  } catch (err) {
+
+    console.error("Insights error:", err);
+
+    document.getElementById("aiInsights").innerText =
+      "Failed to generate insights.";
+
   }
-});
+
+}
+
+
+async function loadWordCloud() {
+
+  try {
+
+    const res = await fetch(`${API}/generate_wordcloud`, {
+
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json"
+      },
+
+      body: JSON.stringify({
+        comments: comments.map(c => c.text)
+      })
+
+    });
+
+    const blob = await res.blob();
+
+    document.getElementById("wordCloud").src =
+      URL.createObjectURL(blob);
+
+  } catch (err) {
+
+    console.error("WordCloud error:", err);
+
+  }
+
+}
+
+async function loadKeywordChart() {
+
+  try {
+
+    const res = await fetch(`${API}/generate_keyword_chart`, {
+
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json"
+      },
+
+      body: JSON.stringify({
+        comments: comments.map(c => c.text)
+      })
+
+    });
+
+    const blob = await res.blob();
+
+    document.getElementById("keywordChart").src =
+      URL.createObjectURL(blob);
+
+  } catch (err) {
+
+    console.error("Keyword chart error:", err);
+
+  }
+
+}
+
+
+async function loadTopicSentiment() {
+
+  try {
+
+    const res = await fetch(
+      `${API}/topic_sentiment`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          comments: comments
+        })
+      }
+    );
+
+    const data = await res.json();
+
+    const list =
+      document.getElementById("topicSentimentList");
+
+    list.innerHTML = "";
+
+    if (!data.topics || data.topics.length === 0) {
+      list.innerHTML = "<li>No topic data</li>";
+      return;
+    }
+
+    data.topics.forEach(t => {
+
+      const li = document.createElement("li");
+
+      li.innerHTML = `
+        <strong>${t.topic}</strong> → 
+        ${t.dominant_sentiment}
+        <br>
+        👍 ${t.positive} 
+        😐 ${t.neutral} 
+        👎 ${t.negative}
+      `;
+
+      list.appendChild(li);
+
+    });
+
+  } catch (err) {
+
+    console.error("Topic sentiment error:", err);
+
+  }
+
+}
