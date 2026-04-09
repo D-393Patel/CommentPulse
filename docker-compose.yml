@@ -1,25 +1,53 @@
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   web:
     build: .
-    # Use the env_file directive to explicitly point to your .env
     env_file:
       - .env
-    # Expose the API port
     ports:
       - "5000:5000"
-    # Map the entire project directory to /app
     volumes:
       - .:/app
-    # Ensure the container environment sees the project folder
     environment:
       - PYTHONPATH=/app
-    # Set the working directory to match your volume mapping
+      - REDIS_URL=redis://redis:6379/0
+      - JOB_QUEUE_NAME=analytics_jobs
+      - DEAD_LETTER_QUEUE_NAME=analytics_jobs_dead_letter
+      - MAX_JOB_ATTEMPTS=3
     working_dir: /app
-    # Run the application using the correct path to main.py
-    command: python app.py
-    # Optional: Add a healthcheck to ensure Docker knows if the API is actually alive
+    command: gunicorn --bind 0.0.0.0:5000 app:app
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+  worker:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379/0
+      - JOB_QUEUE_NAME=analytics_jobs
+      - DEAD_LETTER_QUEUE_NAME=analytics_jobs_dead_letter
+      - MAX_JOB_ATTEMPTS=3
+    working_dir: /app
+    command: python worker.py
+    depends_on:
+      redis:
+        condition: service_healthy

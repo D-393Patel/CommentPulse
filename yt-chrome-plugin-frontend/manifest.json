@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Sentiment Insights",
-  "version": "1.0",
+  "version": "1.0.1",
   "description": "Analyzes YouTube video comments for sentiment.",
   "action": {
     "default_popup": "popup.html"
@@ -9,9 +9,12 @@
   "permissions": [
     "tabs",
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "host_permissions": [
-    "http://localhost:5000/*"
+    "http://localhost:5000/*",
+    "http://127.0.0.1:5000/*",
+    "https://*.trycloudflare.com/*"
   ]
 }

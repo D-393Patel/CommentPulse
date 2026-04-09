@@ -1,625 +1,966 @@
-import os
 import io
+import json
+import logging
+import os
 import re
-import pickle
+import base64
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Callable
+
 import requests
-import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
 from dotenv import load_dotenv
-from wordcloud import WordCloud
-
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import KMeans
-
-from keybert import KeyBERT
-
-
-# ------------------------------------------------
-# Setup
-# ------------------------------------------------
-
-script_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.dirname(script_dir)
-
-load_dotenv(os.path.join(root_dir, ".env"))
-
-nltk.download("stopwords", quiet=True)
-nltk.download("wordnet", quiet=True)
-
-app = Flask(__name__)
-CORS(app)
-
-
-# ------------------------------------------------
-# API KEYS
-# ------------------------------------------------
-
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-
-
-# ------------------------------------------------
-# Load ML Model
-# ------------------------------------------------
-
-model = None
-vectorizer = None
+from flask import Flask, Response, g, jsonify, request, send_file, url_for
+from flask_cors import CORS
+from requests import Response as RequestsResponse
+from analytics_runtime import AnalyticsRuntime, create_job_handlers
 
 try:
-
-    model_path = os.path.join(root_dir, "lgbm_model.pkl")
-    vec_path = os.path.join(root_dir, "tfidf_vectorizer.pkl")
-
-    if os.path.exists(model_path):
-        with open(model_path, "rb") as f:
-            model = pickle.load(f)
-
-    if os.path.exists(vec_path):
-        with open(vec_path, "rb") as f:
-            vectorizer = pickle.load(f)
-
-    print("Sentiment model loaded")
-
-except Exception as e:
-    print("MODEL LOAD ERROR:", e)
-
-
-# ------------------------------------------------
-# Semantic Keyword Model
-# ------------------------------------------------
+    import redis
+except ImportError:
+    redis = None
 
 try:
+    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
-    kw_model = KeyBERT()
+    PROMETHEUS_ENABLED = True
+except ImportError:
+    CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
+    PROMETHEUS_ENABLED = False
 
-    print("KeyBERT model loaded")
+    class _NoOpMetric:
+        def labels(self, **_: Any) -> "_NoOpMetric":
+            return self
 
-except Exception as e:
+        def inc(self, amount: int = 1) -> None:
+            return None
 
-    print("KeyBERT load error:", e)
-    kw_model = None
+        def observe(self, value: float) -> None:
+            return None
 
+        def set(self, value: float) -> None:
+            return None
 
-# ------------------------------------------------
-# NLP Setup
-# ------------------------------------------------
+    def Counter(*_: Any, **__: Any) -> _NoOpMetric:
+        return _NoOpMetric()
 
-STOP_WORDS = set(stopwords.words("english")) - {"not", "no", "but"}
-LEMMATIZER = WordNetLemmatizer()
+    def Gauge(*_: Any, **__: Any) -> _NoOpMetric:
+        return _NoOpMetric()
 
+    def Histogram(*_: Any, **__: Any) -> _NoOpMetric:
+        return _NoOpMetric()
 
-def preprocess_comment(text):
-
-    text = str(text).lower()
-    text = re.sub(r"\n", " ", text)
-    text = re.sub(r"[^a-z0-9 ]", "", text)
-
-    words = text.split()
-    words = [w for w in words if w not in STOP_WORDS]
-    words = [LEMMATIZER.lemmatize(w) for w in words]
-
-    return " ".join(words)
+    def generate_latest() -> bytes:
+        return b'# metrics_unavailable{reason="prometheus_client_missing"} 1\n'
 
 
-# ------------------------------------------------
-# Topic Extraction
-# ------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
-def extract_topics(comments):
 
-    try:
+@dataclass(frozen=True)
+class AppConfig:
+    host: str
+    port: int
+    debug: bool
+    request_timeout_seconds: int
+    max_comments_per_request: int
+    max_comment_length: int
+    log_level: str
+    youtube_api_key: str | None
+    model_path: Path
+    vectorizer_path: Path
+    async_worker_count: int
+    job_ttl_seconds: int
+    redis_url: str | None
+    job_queue_name: str
+    dead_letter_queue_name: str
+    max_job_attempts: int
 
-        if not comments:
-            return []
-
-        text = " ".join(comments)
-
-        # Semantic keyword extraction
-        if kw_model:
-
-            keywords = kw_model.extract_keywords(
-                text,
-                keyphrase_ngram_range=(1, 2),
-                stop_words="english",
-                top_n=5
-            )
-
-            topics = []
-
-            for i, (kw, score) in enumerate(keywords):
-
-                topics.append({
-                    "topic": i + 1,
-                    "title": kw.title(),
-                    "score": round(float(score), 3)
-                })
-
-            return topics
-
-        # Fallback to TF-IDF clustering
-        processed = [preprocess_comment(c) for c in comments if c.strip()]
-
-        tfidf = TfidfVectorizer(
-            stop_words="english",
-            max_features=50,
-            ngram_range=(1, 2)
+    @classmethod
+    def from_env(cls) -> "AppConfig":
+        return cls(
+            host=os.getenv("HOST", "0.0.0.0"),
+            port=int(os.getenv("PORT", "5000")),
+            debug=os.getenv("DEBUG", "false").lower() == "true",
+            request_timeout_seconds=int(os.getenv("REQUEST_TIMEOUT_SECONDS", "30")),
+            max_comments_per_request=int(os.getenv("MAX_COMMENTS_PER_REQUEST", "200")),
+            max_comment_length=int(os.getenv("MAX_COMMENT_LENGTH", "1000")),
+            log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+            youtube_api_key=os.getenv("YOUTUBE_API_KEY"),
+            model_path=BASE_DIR / "lgbm_model.pkl",
+            vectorizer_path=BASE_DIR / "tfidf_vectorizer.pkl",
+            async_worker_count=int(os.getenv("ASYNC_WORKER_COUNT", "4")),
+            job_ttl_seconds=int(os.getenv("JOB_TTL_SECONDS", "3600")),
+            redis_url=os.getenv("REDIS_URL"),
+            job_queue_name=os.getenv("JOB_QUEUE_NAME", "analytics_jobs"),
+            dead_letter_queue_name=os.getenv("DEAD_LETTER_QUEUE_NAME", "analytics_jobs_dead_letter"),
+            max_job_attempts=int(os.getenv("MAX_JOB_ATTEMPTS", "3")),
         )
 
-        X = tfidf.fit_transform(processed)
 
-        n_clusters = min(3, len(processed))
-
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        kmeans.fit(X)
-
-        terms = tfidf.get_feature_names_out()
-
-        topics = []
-
-        for i, center in enumerate(kmeans.cluster_centers_):
-
-            words = [terms[j] for j in center.argsort()[-5:]]
-
-            topics.append({
-                "topic": i + 1,
-                "keywords": words
-            })
-
-        return topics
-
-    except Exception as e:
-
-        print("Topic extraction error:", e)
-
-        return [{
-            "topic": 1,
-            "title": "AI Discussion"
-        }]
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for field_name in ("request_id", "path", "status_code", "duration_ms", "job_id", "job_type"):
+            value = getattr(record, field_name, None)
+            if value is not None:
+                payload[field_name] = value
+        return json.dumps(payload)
 
 
-# ------------------------------------------------
-# Gemini AI Insights
-# ------------------------------------------------
+def configure_logging(level: str) -> logging.Logger:
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
 
-def generate_ai_insights(comments):
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(JsonFormatter())
+        root_logger.addHandler(handler)
+    else:
+        for handler in root_logger.handlers:
+            handler.setFormatter(JsonFormatter())
 
-    if not GEMINI_API_KEY:
-        return "Gemini API key not configured."
+    return logging.getLogger("youtube_sentiment_api")
 
-    sample = "\n".join(comments[:40])
 
-    prompt = f"""
-Analyze these YouTube comments.
+REQUEST_COUNT = Counter(
+    "youtube_sentiment_http_requests_total",
+    "Total HTTP requests.",
+    ["method", "path", "status_code"],
+)
+REQUEST_LATENCY = Histogram(
+    "youtube_sentiment_http_request_duration_seconds",
+    "HTTP request latency.",
+    ["method", "path"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+INFERENCE_COMMENT_COUNT = Histogram(
+    "youtube_sentiment_inference_comment_count",
+    "Number of comments sent to inference endpoints.",
+    buckets=(1, 5, 10, 25, 50, 100, 200, 500),
+)
+EXTERNAL_CALL_COUNT = Counter(
+    "youtube_sentiment_external_requests_total",
+    "External dependency calls.",
+    ["provider", "outcome"],
+)
+MODEL_READY = Gauge(
+    "youtube_sentiment_model_ready",
+    "Whether the model and vectorizer are loaded successfully.",
+)
+ASYNC_JOBS_IN_PROGRESS = Gauge(
+    "youtube_sentiment_async_jobs_in_progress",
+    "Number of jobs currently running in the async executor.",
+)
+ASYNC_JOB_COUNT = Counter(
+    "youtube_sentiment_async_jobs_total",
+    "Async job submissions and outcomes.",
+    ["job_type", "status"],
+)
+ASYNC_JOB_DURATION = Histogram(
+    "youtube_sentiment_async_job_duration_seconds",
+    "Async job duration.",
+    ["job_type"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+)
+QUEUE_DEPTH = Gauge(
+    "youtube_sentiment_queue_depth",
+    "Current Redis queue depth by queue type.",
+    ["queue_type"],
+)
 
-Provide:
-1. Overall sentiment summary
-2. Top positive themes
-3. Top negative themes
-4. Suggestions for the creator
 
-Comments:
-{sample}
-"""
+class ValidationError(Exception):
+    def __init__(self, message: str, status_code: int = 400) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
-    payload = {
-        "contents": [
-            {"parts": [{"text": prompt}]}
-        ]
-    }
 
+class JobNotReadyError(Exception):
+    pass
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+@dataclass
+class JobRecord:
+    job_id: str
+    job_type: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    result: Any = None
+    error: str | None = None
+    content_type: str | None = None
+    artifact_filename: str | None = None
+    attempts: int = 0
+    max_attempts: int = 1
+    dead_lettered: bool = False
+
+    def to_response(self) -> dict[str, Any]:
+        payload = {
+            "job_id": self.job_id,
+            "job_type": self.job_type,
+            "status": self.status,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "error": self.error,
+            "attempts": self.attempts,
+            "max_attempts": self.max_attempts,
+            "dead_lettered": self.dead_lettered,
+        }
+        if self.status == "completed" and isinstance(self.result, dict):
+            payload["result"] = self.result
+        if self.status == "completed" and isinstance(self.result, bytes):
+            payload["artifact_ready"] = True
+        return payload
+
+
+class LocalJobManager:
+    def __init__(
+        self,
+        max_workers: int,
+        ttl_seconds: int,
+        logger: logging.Logger,
+        handlers: dict[str, Callable[[dict[str, Any]], tuple[Any, str | None, str | None]]],
+        max_attempts: int,
+    ) -> None:
+        self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="analytics")
+        self.ttl_seconds = ttl_seconds
+        self.logger = logger
+        self.handlers = handlers
+        self.max_attempts = max_attempts
+        self._jobs: dict[str, JobRecord] = {}
+        self._lock = threading.Lock()
+
+    def submit(self, job_type: str, payload: dict[str, Any]) -> JobRecord:
+        self._cleanup_expired_jobs()
+        now = utc_now()
+        job = JobRecord(
+            job_id=str(uuid.uuid4()),
+            job_type=job_type,
+            status="queued",
+            created_at=now,
+            updated_at=now,
+            max_attempts=self.max_attempts,
+        )
+        with self._lock:
+            self._jobs[job.job_id] = job
+        ASYNC_JOB_COUNT.labels(job_type=job_type, status="queued").inc()
+        self.executor.submit(self._run_job, job.job_id, payload)
+        return job
+
+    def _run_job(self, job_id: str, payload: dict[str, Any]) -> None:
+        with self._lock:
+            job = self._jobs[job_id]
+            job.status = "running"
+            job.updated_at = utc_now()
+
+        started_at = time.perf_counter()
+        ASYNC_JOBS_IN_PROGRESS.inc()
+        ASYNC_JOB_COUNT.labels(job_type=job.job_type, status="running").inc()
+
+        try:
+            handler = self.handlers[job.job_type]
+            with self._lock:
+                job.attempts += 1
+            result, content_type, artifact_filename = handler(payload)
+            duration = time.perf_counter() - started_at
+            ASYNC_JOB_DURATION.labels(job_type=job.job_type).observe(duration)
+            with self._lock:
+                job.status = "completed"
+                job.updated_at = utc_now()
+                job.completed_at = job.updated_at
+                job.result = result
+                job.content_type = content_type
+                job.artifact_filename = artifact_filename
+            ASYNC_JOB_COUNT.labels(job_type=job.job_type, status="completed").inc()
+        except Exception as exc:
+            should_retry = False
+            with self._lock:
+                job.error = str(exc)
+                job.updated_at = utc_now()
+                if job.attempts < job.max_attempts:
+                    job.status = "queued"
+                    should_retry = True
+                else:
+                    job.status = "failed"
+                    job.completed_at = job.updated_at
+                    job.dead_lettered = True
+            if should_retry:
+                ASYNC_JOB_COUNT.labels(job_type=job.job_type, status="retry").inc()
+                self.executor.submit(self._run_job, job.job_id, payload)
+            else:
+                ASYNC_JOB_COUNT.labels(job_type=job.job_type, status="failed").inc()
+                self.logger.exception(
+                    "async_job_failed",
+                    extra={"job_id": job.job_id, "job_type": job.job_type},
+                )
+        finally:
+            ASYNC_JOBS_IN_PROGRESS.inc(-1)
+
+    def get(self, job_id: str) -> JobRecord | None:
+        self._cleanup_expired_jobs()
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def get_artifact(self, job_id: str) -> tuple[bytes, str, str | None]:
+        job = self.get(job_id)
+        if job is None:
+            raise ValidationError("Job not found.", 404)
+        if job.status != "completed":
+            raise JobNotReadyError()
+        if not isinstance(job.result, bytes) or not job.content_type:
+            raise ValidationError("Job does not produce a downloadable artifact.", 400)
+        return job.result, job.content_type, job.artifact_filename
+
+    def _cleanup_expired_jobs(self) -> None:
+        cutoff = utc_now().timestamp() - self.ttl_seconds
+        with self._lock:
+            expired_ids = [
+                job_id
+                for job_id, job in self._jobs.items()
+                if job.updated_at.timestamp() < cutoff
+            ]
+            for job_id in expired_ids:
+                del self._jobs[job_id]
+
+
+class RedisJobManager:
+    def __init__(
+        self,
+        redis_url: str,
+        queue_name: str,
+        dead_letter_queue_name: str,
+        ttl_seconds: int,
+        logger: logging.Logger,
+        max_attempts: int,
+    ) -> None:
+        if redis is None:
+            raise RuntimeError("redis package is not available.")
+        self.client = redis.Redis.from_url(redis_url, decode_responses=False)
+        self.queue_name = queue_name
+        self.dead_letter_queue_name = dead_letter_queue_name
+        self.ttl_seconds = ttl_seconds
+        self.logger = logger
+        self.max_attempts = max_attempts
+
+    def submit(self, job_type: str, payload: dict[str, Any]) -> JobRecord:
+        now = utc_now()
+        job = JobRecord(
+            job_id=str(uuid.uuid4()),
+            job_type=job_type,
+            status="queued",
+            created_at=now,
+            updated_at=now,
+            max_attempts=self.max_attempts,
+        )
+        self._write_job(job)
+        message = json.dumps({"job_id": job.job_id, "job_type": job_type, "payload": payload})
+        self.client.rpush(self.queue_name, message)
+        self.update_queue_metrics()
+        ASYNC_JOB_COUNT.labels(job_type=job_type, status="queued").inc()
+        return job
+
+    def get(self, job_id: str) -> JobRecord | None:
+        data = self.client.get(self._job_key(job_id))
+        self.update_queue_metrics()
+        if not data:
+            return None
+        payload = json.loads(data.decode("utf-8"))
+        result = payload.get("result")
+        if payload.get("result_is_bytes") and isinstance(result, str):
+            result = base64.b64decode(result.encode("utf-8"))
+        return JobRecord(
+            job_id=payload["job_id"],
+            job_type=payload["job_type"],
+            status=payload["status"],
+            created_at=datetime.fromisoformat(payload["created_at"]),
+            updated_at=datetime.fromisoformat(payload["updated_at"]),
+            completed_at=datetime.fromisoformat(payload["completed_at"]) if payload.get("completed_at") else None,
+            result=result,
+            error=payload.get("error"),
+            content_type=payload.get("content_type"),
+            artifact_filename=payload.get("artifact_filename"),
+            attempts=payload.get("attempts", 0),
+            max_attempts=payload.get("max_attempts", self.max_attempts),
+            dead_lettered=payload.get("dead_lettered", False),
+        )
+
+    def get_artifact(self, job_id: str) -> tuple[bytes, str, str | None]:
+        job = self.get(job_id)
+        if job is None:
+            raise ValidationError("Job not found.", 404)
+        if job.status != "completed":
+            raise JobNotReadyError()
+        if not isinstance(job.result, bytes) or not job.content_type:
+            raise ValidationError("Job does not produce a downloadable artifact.", 400)
+        return job.result, job.content_type, job.artifact_filename
+
+    def get_dead_letter_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
+        self.update_queue_metrics()
+        items = self.client.lrange(self.dead_letter_queue_name, 0, max(0, limit - 1))
+        jobs = []
+        for raw in items:
+            payload = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+            job = self.get(payload["job_id"])
+            jobs.append(
+                {
+                    "job_id": payload["job_id"],
+                    "job_type": payload["job_type"],
+                    "payload": payload["payload"],
+                    "status": job.status if job else "missing",
+                    "attempts": job.attempts if job else None,
+                    "max_attempts": job.max_attempts if job else None,
+                    "error": job.error if job else None,
+                    "dead_lettered": job.dead_lettered if job else True,
+                }
+            )
+        return jobs
+
+    def replay_dead_letter_job(self, job_id: str) -> bool:
+        items = self.client.lrange(self.dead_letter_queue_name, 0, -1)
+        for index, raw in enumerate(items):
+            payload = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+            if payload["job_id"] != job_id:
+                continue
+
+            job = self.get(job_id)
+            if job is None:
+                return False
+
+            job.status = "queued"
+            job.updated_at = utc_now()
+            job.completed_at = None
+            job.error = None
+            job.dead_lettered = False
+            job.attempts = 0
+            self._write_job(job)
+
+            pipeline = self.client.pipeline()
+            pipeline.lrem(self.dead_letter_queue_name, 1, raw)
+            pipeline.rpush(self.queue_name, json.dumps(payload))
+            pipeline.execute()
+            self.update_queue_metrics()
+            return True
+        return False
+
+    def update_queue_metrics(self) -> None:
+        try:
+            QUEUE_DEPTH.labels(queue_type="primary").set(self.client.llen(self.queue_name))
+            QUEUE_DEPTH.labels(queue_type="dead_letter").set(self.client.llen(self.dead_letter_queue_name))
+        except Exception:
+            return None
+
+    def _write_job(self, job: JobRecord) -> None:
+        result = job.result
+        result_is_bytes = isinstance(result, bytes)
+        if result_is_bytes:
+            result = base64.b64encode(result).decode("utf-8")
+        payload = {
+            "job_id": job.job_id,
+            "job_type": job.job_type,
+            "status": job.status,
+            "created_at": job.created_at.isoformat(),
+            "updated_at": job.updated_at.isoformat(),
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            "result": result,
+            "result_is_bytes": result_is_bytes,
+            "error": job.error,
+            "content_type": job.content_type,
+            "artifact_filename": job.artifact_filename,
+            "attempts": job.attempts,
+            "max_attempts": job.max_attempts,
+            "dead_lettered": job.dead_lettered,
+        }
+        self.client.setex(self._job_key(job.job_id), self.ttl_seconds, json.dumps(payload))
+
+    def _job_key(self, job_id: str) -> str:
+        return f"job:{job_id}"
+
+
+def error_response(message: str, status_code: int) -> tuple[Response, int]:
+    request_id = getattr(g, "request_id", None)
+    return (
+        jsonify(
+            {
+                "error": {
+                    "message": message,
+                    "status_code": status_code,
+                    "request_id": request_id,
+                }
+            }
+        ),
+        status_code,
+    )
+
+
+def parse_json_body() -> dict[str, Any]:
+    if not request.is_json:
+        raise ValidationError("Request must have application/json content type.", 415)
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise ValidationError("Request body must be a JSON object.")
+    return payload
+
+
+def validate_comments(
+    comments: Any,
+    config: AppConfig,
+    *,
+    require_timestamps: bool = False,
+) -> list[Any]:
+    if not isinstance(comments, list) or not comments:
+        raise ValidationError("comments must be a non-empty list.")
+    if len(comments) > config.max_comments_per_request:
+        raise ValidationError(
+            f"comments exceeds MAX_COMMENTS_PER_REQUEST={config.max_comments_per_request}.",
+            413,
+        )
+
+    validated: list[Any] = []
+    for item in comments:
+        if require_timestamps:
+            if not isinstance(item, dict):
+                raise ValidationError("Each comment must be an object with text and timestamp.")
+            text = item.get("text")
+            timestamp = item.get("timestamp")
+            if not isinstance(text, str) or not text.strip():
+                raise ValidationError("Each comment object must include non-empty text.")
+            if len(text) > config.max_comment_length:
+                raise ValidationError(
+                    f"Comment length exceeds MAX_COMMENT_LENGTH={config.max_comment_length}."
+                )
+            if not isinstance(timestamp, str) or not timestamp.strip():
+                raise ValidationError("Each comment object must include a non-empty timestamp.")
+            validated.append({"text": text, "timestamp": timestamp})
+        else:
+            if not isinstance(item, str) or not item.strip():
+                raise ValidationError("Each comment must be a non-empty string.")
+            if len(item) > config.max_comment_length:
+                raise ValidationError(
+                    f"Comment length exceeds MAX_COMMENT_LENGTH={config.max_comment_length}."
+                )
+            validated.append(item)
+    return validated
+
+
+def validate_sentiment_counts(data: Any) -> dict[str, int]:
+    if not isinstance(data, dict):
+        raise ValidationError("sentiment_counts must be an object.")
+    counts: dict[str, int] = {}
+    for key in ("1", "0", "-1"):
+        value = data.get(key, 0)
+        if not isinstance(value, int) or value < 0:
+            raise ValidationError("sentiment_counts values must be non-negative integers.")
+        counts[key] = value
+    return counts
+
+
+def validate_sentiment_data(
+    sentiment_data: Any,
+    config: AppConfig,
+) -> list[dict[str, Any]]:
+    if not isinstance(sentiment_data, list) or not sentiment_data:
+        raise ValidationError("sentiment_data must be a non-empty list.")
+    if len(sentiment_data) > config.max_comments_per_request:
+        raise ValidationError(
+            f"sentiment_data exceeds MAX_COMMENTS_PER_REQUEST={config.max_comments_per_request}.",
+            413,
+        )
+
+    validated: list[dict[str, Any]] = []
+    for item in sentiment_data:
+        if not isinstance(item, dict):
+            raise ValidationError("Each sentiment_data entry must be an object.")
+        timestamp = item.get("timestamp")
+        sentiment = item.get("sentiment")
+        if not isinstance(timestamp, str) or not timestamp.strip():
+            raise ValidationError("Each sentiment_data entry needs a non-empty timestamp.")
+        if not isinstance(sentiment, int) or sentiment not in {-1, 0, 1}:
+            raise ValidationError("Each sentiment must be one of -1, 0, or 1.")
+        validated.append({"timestamp": timestamp, "sentiment": sentiment})
+    return validated
+
+
+def timed_external_request(
+    session: requests.Session,
+    method: str,
+    url: str,
+    *,
+    provider: str,
+    timeout: int,
+    **kwargs: Any,
+) -> RequestsResponse:
     try:
-
-        response = requests.post(GEMINI_URL, json=payload, timeout=60)
-
-        data = response.json()
-
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-
-    except Exception as e:
-
-        print("Gemini error:", e)
-
-        return "AI insights unavailable"
+        response = session.request(method=method, url=url, timeout=timeout, **kwargs)
+        response.raise_for_status()
+        EXTERNAL_CALL_COUNT.labels(provider=provider, outcome="success").inc()
+        return response
+    except requests.RequestException:
+        EXTERNAL_CALL_COUNT.labels(provider=provider, outcome="failure").inc()
+        raise
 
 
-# ------------------------------------------------
-# Root
-# ------------------------------------------------
+def create_app() -> Flask:
+    config = AppConfig.from_env()
+    logger = configure_logging(config.log_level)
 
-@app.route("/")
-def home():
-    return jsonify({
-        "message": "YouTube Sentiment API Running"
-    })
-
-
-# ------------------------------------------------
-# Health
-# ------------------------------------------------
-
-@app.route("/health")
-def health():
-    return jsonify({"status": "ok"})
-
-
-# ------------------------------------------------
-# Fetch YouTube Comments
-# ------------------------------------------------
-
-@app.route("/get_youtube_comments")
-def get_comments():
-
-    video_id = request.args.get("videoId")
-
-    if not video_id:
-        return jsonify({"comments": []})
-
-    comments = []
-
-    url = "https://www.googleapis.com/youtube/v3/commentThreads"
-
-    params = {
-        "part": "snippet",
-        "videoId": video_id,
-        "maxResults": 100,
-        "textFormat": "plainText",
-        "key": YOUTUBE_API_KEY
-    }
-
+    app = Flask(__name__)
+    app.config["APP_CONFIG"] = config
+    CORS(app)
     try:
+        runtime = AnalyticsRuntime(config.model_path, config.vectorizer_path, logger)
+        MODEL_READY.set(1)
+        logger.info("Sentiment model artifacts loaded successfully.")
+    except Exception as exc:
+        MODEL_READY.set(0)
+        logger.exception("Failed to load model artifacts: %s", exc)
+        runtime = None
 
-        r = requests.get(url, params=params)
-        data = r.json()
+    handlers = create_job_handlers(runtime) if runtime is not None else {}
+    redis_healthy = False
+    if config.redis_url and redis is not None:
+        try:
+            jobs = RedisJobManager(
+                config.redis_url,
+                config.job_queue_name,
+                config.dead_letter_queue_name,
+                config.job_ttl_seconds,
+                logger,
+                config.max_job_attempts,
+            )
+            jobs.client.ping()
+            redis_healthy = True
+            job_backend = "redis"
+        except Exception as exc:
+            logger.warning("Redis job backend unavailable, falling back to local jobs: %s", exc)
+            jobs = LocalJobManager(
+                config.async_worker_count,
+                config.job_ttl_seconds,
+                logger,
+                handlers,
+                config.max_job_attempts,
+            )
+            job_backend = "local"
+    else:
+        jobs = LocalJobManager(
+            config.async_worker_count,
+            config.job_ttl_seconds,
+            logger,
+            handlers,
+            config.max_job_attempts,
+        )
+        job_backend = "local"
 
+    def ensure_runtime() -> AnalyticsRuntime:
+        if runtime is None:
+            raise ValidationError("Model artifacts are not loaded.", 503)
+        return runtime
+
+    def ensure_redis_backend() -> RedisJobManager:
+        if not isinstance(jobs, RedisJobManager):
+            raise ValidationError("Redis job backend is not active.", 409)
+        jobs.update_queue_metrics()
+        return jobs
+
+    def submit_json_job(job_type: str, payload: dict[str, Any]) -> Response:
+        job = jobs.submit(job_type, payload)
+        response = job.to_response()
+        response["status_url"] = url_for("get_job", job_id=job.job_id, _external=False)
+        response["artifact_url"] = None
+        return jsonify(response), 202
+
+    def submit_artifact_job(job_type: str, payload: dict[str, Any]) -> Response:
+        job = jobs.submit(job_type, payload)
+        response = job.to_response()
+        response["status_url"] = url_for("get_job", job_id=job.job_id, _external=False)
+        response["artifact_url"] = url_for("get_job_artifact", job_id=job.job_id, _external=False)
+        return jsonify(response), 202
+
+    @app.before_request
+    def before_request() -> None:
+        g.request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        g.request_started_at = time.perf_counter()
+
+    @app.after_request
+    def after_request(response: Response) -> Response:
+        duration_seconds = time.perf_counter() - g.request_started_at
+        duration_ms = round(duration_seconds * 1000, 2)
+        response.headers["X-Request-ID"] = g.request_id
+        REQUEST_COUNT.labels(
+            method=request.method,
+            path=request.path,
+            status_code=str(response.status_code),
+        ).inc()
+        REQUEST_LATENCY.labels(method=request.method, path=request.path).observe(duration_seconds)
+        logger.info(
+            "request_complete",
+            extra={
+                "request_id": g.request_id,
+                "path": request.path,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        return response
+
+    @app.errorhandler(ValidationError)
+    def handle_validation_error(error: ValidationError) -> tuple[Response, int]:
+        return error_response(str(error), error.status_code)
+
+    @app.errorhandler(JobNotReadyError)
+    def handle_job_not_ready(_: JobNotReadyError) -> tuple[Response, int]:
+        return error_response("Job is not finished yet.", 409)
+
+    @app.errorhandler(Exception)
+    def handle_unexpected_error(_: Exception) -> tuple[Response, int]:
+        logger.exception(
+            "unhandled_exception",
+            extra={"request_id": getattr(g, "request_id", None), "path": request.path},
+        )
+        return error_response("Internal server error.", 500)
+
+    @app.route("/")
+    def home() -> Response:
+        return jsonify(
+            {
+                "message": "YouTube Sentiment API Running",
+                "service": "youtube-sentiment-api",
+                "version": "3.0",
+                "async_jobs": True,
+                "local_only_insights": True,
+            }
+        )
+
+    @app.route("/health")
+    @app.route("/livez")
+    def liveness() -> Response:
+        return jsonify({"status": "ok"})
+
+    @app.route("/readyz")
+    def readiness() -> tuple[Response, int]:
+        dependencies = {
+            "model": runtime is not None,
+            "vectorizer": runtime is not None,
+            "youtube_api_key": bool(config.youtube_api_key),
+            "async_executor": True,
+            "prometheus_enabled": PROMETHEUS_ENABLED,
+            "job_backend": job_backend,
+            "redis": redis_healthy if job_backend == "redis" else None,
+            "max_job_attempts": config.max_job_attempts,
+        }
+        ready = dependencies["model"] and dependencies["vectorizer"] and dependencies["async_executor"]
+        status = 200 if ready else 503
+        return jsonify({"status": "ready" if ready else "degraded", "dependencies": dependencies}), status
+
+    @app.route("/metrics")
+    def metrics() -> Response:
+        return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
+
+    @app.route("/get_youtube_comments")
+    def get_comments() -> Response:
+        video_id = request.args.get("videoId", "").strip()
+        if not video_id:
+            raise ValidationError("videoId query parameter is required.")
+        if not config.youtube_api_key:
+            return error_response("YouTube API key not configured.", 503)
+
+        url = "https://www.googleapis.com/youtube/v3/commentThreads"
+        params = {
+            "part": "snippet",
+            "videoId": video_id,
+            "maxResults": 100,
+            "textFormat": "plainText",
+            "key": config.youtube_api_key,
+        }
+        with requests.Session() as session:
+            try:
+                response = timed_external_request(
+                    session,
+                    "GET",
+                    url,
+                    provider="youtube",
+                    timeout=config.request_timeout_seconds,
+                    params=params,
+                )
+                data = response.json()
+            except Exception:
+                logger.exception("YouTube API fetch failed.")
+                return error_response("Failed to fetch YouTube comments.", 502)
+
+        comments = []
         for item in data.get("items", []):
-
             snippet = item["snippet"]["topLevelComment"]["snippet"]
+            comments.append({"text": snippet["textOriginal"], "timestamp": snippet["publishedAt"]})
+        return jsonify({"comments": comments, "count": len(comments)})
+
+    @app.route("/predict_with_timestamps", methods=["POST"])
+    def predict_with_timestamps() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config, require_timestamps=True)
+        INFERENCE_COMMENT_COUNT.observe(len(comments))
+        texts = [comment["text"] for comment in comments]
+        predictions = ensure_runtime().predict_sentiments(texts)
+        return jsonify(
+            [
+                {
+                    "comment": text,
+                    "sentiment": sentiment,
+                    "timestamp": comment["timestamp"],
+                }
+                for text, sentiment, comment in zip(texts, predictions, comments)
+            ]
+        )
+
+    @app.route("/generate_chart", methods=["POST"])
+    def generate_chart() -> Response:
+        payload = parse_json_body()
+        counts = validate_sentiment_counts(payload.get("sentiment_counts"))
+        image_bytes, content_type, _ = ensure_runtime().render_pie_chart(counts)
+        return send_file(io.BytesIO(image_bytes), mimetype=content_type)
+
+    @app.route("/generate_wordcloud", methods=["POST"])
+    def generate_wordcloud() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config)
+        image_bytes, content_type, _ = ensure_runtime().render_wordcloud(comments)
+        return send_file(io.BytesIO(image_bytes), mimetype=content_type)
+
+    @app.route("/extract_topics", methods=["POST"])
+    def topics() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config)
+        return jsonify({"topics": ensure_runtime().extract_topics(comments)})
+
+    @app.route("/generate_insights", methods=["POST"])
+    def insights() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config)
+        return jsonify({"insights": ensure_runtime().generate_local_insights(comments)})
+
+    @app.route("/generate_trend_graph", methods=["POST"])
+    def generate_trend_graph() -> Response:
+        payload = parse_json_body()
+        sentiment_data = validate_sentiment_data(payload.get("sentiment_data"), config)
+        image_bytes, content_type, _ = ensure_runtime().render_trend_graph(sentiment_data)
+        return send_file(io.BytesIO(image_bytes), mimetype=content_type)
+
+    @app.route("/generate_keyword_chart", methods=["POST"])
+    def generate_keyword_chart() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config)
+        image_bytes, content_type, _ = ensure_runtime().render_keyword_chart(comments)
+        return send_file(io.BytesIO(image_bytes), mimetype=content_type)
+
+    @app.route("/topic_sentiment", methods=["POST"])
+    def topic_sentiment() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config, require_timestamps=True)
+        INFERENCE_COMMENT_COUNT.observe(len(comments))
+        return jsonify(ensure_runtime().compute_topic_sentiment(comments))
+
+    @app.route("/jobs/insights", methods=["POST"])
+    def create_insights_job() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config)
+        return submit_json_job("insights", {"comments": comments})
+
+    @app.route("/jobs/topics", methods=["POST"])
+    def create_topics_job() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config)
+        return submit_json_job("topics", {"comments": comments})
+
+    @app.route("/jobs/topic-sentiment", methods=["POST"])
+    def create_topic_sentiment_job() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config, require_timestamps=True)
+        return submit_json_job("topic-sentiment", {"comments": comments})
+
+    @app.route("/jobs/wordcloud", methods=["POST"])
+    def create_wordcloud_job() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config)
+        return submit_artifact_job("wordcloud", {"comments": comments})
+
+    @app.route("/jobs/keyword-chart", methods=["POST"])
+    def create_keyword_chart_job() -> Response:
+        payload = parse_json_body()
+        comments = validate_comments(payload.get("comments"), config)
+        return submit_artifact_job("keyword-chart", {"comments": comments})
+
+    @app.route("/jobs/trend-graph", methods=["POST"])
+    def create_trend_graph_job() -> Response:
+        payload = parse_json_body()
+        sentiment_data = validate_sentiment_data(payload.get("sentiment_data"), config)
+        return submit_artifact_job("trend-graph", {"sentiment_data": sentiment_data})
+
+    @app.route("/jobs/<job_id>", methods=["GET"])
+    def get_job(job_id: str) -> Response:
+        job = jobs.get(job_id)
+        if job is None:
+            raise ValidationError("Job not found.", 404)
+        payload = job.to_response()
+        payload["status_url"] = url_for("get_job", job_id=job_id, _external=False)
+        payload["artifact_url"] = (
+            url_for("get_job_artifact", job_id=job_id, _external=False)
+            if isinstance(job.result, bytes) or job.status in {"queued", "running"}
+            else None
+        )
+        status_code = 200 if job.status in {"completed", "failed"} else 202
+        return jsonify(payload), status_code
+
+    @app.route("/jobs/<job_id>/artifact", methods=["GET"])
+    def get_job_artifact(job_id: str) -> Response:
+        artifact, content_type, filename = jobs.get_artifact(job_id)
+        return send_file(
+            io.BytesIO(artifact),
+            mimetype=content_type,
+            download_name=filename,
+        )
+
+    @app.route("/admin/jobs/dead-letter", methods=["GET"])
+    def list_dead_letter_jobs() -> Response:
+        backend = ensure_redis_backend()
+        limit = request.args.get("limit", default=20, type=int)
+        limit = max(1, min(limit, 100))
+        return jsonify(
+            {
+                "job_backend": "redis",
+                "dead_letter_jobs": backend.get_dead_letter_jobs(limit=limit),
+            }
+        )
+
+    @app.route("/admin/jobs/<job_id>/replay", methods=["POST"])
+    def replay_dead_letter_job(job_id: str) -> Response:
+        backend = ensure_redis_backend()
+        replayed = backend.replay_dead_letter_job(job_id)
+        if not replayed:
+            raise ValidationError("Dead-letter job not found.", 404)
+        return jsonify({"job_id": job_id, "status": "requeued"})
+
+    return app
+
+
+app = create_app()
 
-            comments.append({
-                "text": snippet["textOriginal"],
-                "timestamp": snippet["publishedAt"]
-            })
-
-    except Exception as e:
-        print("YouTube API error:", e)
-
-    return jsonify({"comments": comments})
-
-
-# ------------------------------------------------
-# Sentiment Prediction
-# ------------------------------------------------
-
-@app.route("/predict_with_timestamps", methods=["POST"])
-def predict():
-
-    data = request.json
-    comments = data.get("comments", [])
-
-    if not comments or model is None or vectorizer is None:
-        return jsonify([])
-
-    texts = [c["text"] for c in comments]
-    timestamps = [c["timestamp"] for c in comments]
-
-    processed = [preprocess_comment(t) for t in texts]
-    X = vectorizer.transform(processed)
-
-    preds = model.predict(X)
-
-    results = []
-
-    for t, s, ts in zip(texts, preds, timestamps):
-
-        results.append({
-            "comment": t,
-            "sentiment": int(s),
-            "timestamp": ts
-        })
-
-    return jsonify(results)
-
-
-# ------------------------------------------------
-# Sentiment Pie Chart
-# ------------------------------------------------
-
-@app.route("/generate_chart", methods=["POST"])
-def chart():
-
-    data = request.json
-    counts = data.get("sentiment_counts", {})
-
-    labels = ["Positive", "Neutral", "Negative"]
-
-    sizes = [
-        counts.get("1", 0),
-        counts.get("0", 0),
-        counts.get("-1", 0)
-    ]
-
-    plt.figure(figsize=(5, 5))
-    plt.pie(sizes, labels=labels, autopct="%1.1f%%")
-
-    img = io.BytesIO()
-    plt.savefig(img, format="png")
-    img.seek(0)
-    plt.close()
-
-    return send_file(img, mimetype="image/png")
-
-
-# ------------------------------------------------
-# Wordcloud
-# ------------------------------------------------
-
-@app.route("/generate_wordcloud", methods=["POST"])
-def wordcloud():
-
-    data = request.json
-    comments = data.get("comments", [])
-
-    processed = [preprocess_comment(c) for c in comments]
-
-    text = " ".join(processed)
-
-    wc = WordCloud(width=800, height=400).generate(text)
-
-    img = io.BytesIO()
-    wc.to_image().save(img, format="PNG")
-
-    img.seek(0)
-
-    return send_file(img, mimetype="image/png")
-
-
-# ------------------------------------------------
-# Topic Extraction API
-# ------------------------------------------------
-
-@app.route("/extract_topics", methods=["POST"])
-def topics():
-
-    data = request.json
-    comments = data.get("comments", [])
-
-    topics = extract_topics(comments)
-
-    return jsonify({"topics": topics})
-
-
-# ------------------------------------------------
-# Gemini Insights
-# ------------------------------------------------
-
-@app.route("/generate_insights", methods=["POST"])
-def insights():
-
-    data = request.json
-    comments = data.get("comments", [])
-
-    insights = generate_ai_insights(comments)
-
-    return jsonify({"insights": insights})
-
-
-# ------------------------------------------------
-# Sentiment Trend Graph
-# ------------------------------------------------
-
-@app.route("/generate_trend_graph", methods=["POST"])
-def trend_graph():
-
-    data = request.json
-    sentiment_data = data.get("sentiment_data", [])
-
-    if not sentiment_data:
-        return jsonify({"error": "No data provided"}), 400
-
-    df = pd.DataFrame(sentiment_data)
-
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df.set_index("timestamp", inplace=True)
-    df["sentiment"] = df["sentiment"].astype(int)
-
-    monthly_counts = df.resample("M")["sentiment"].value_counts().unstack(fill_value=0)
-
-    monthly_totals = monthly_counts.sum(axis=1)
-
-    monthly_percent = (monthly_counts.T / monthly_totals).T * 100
-
-    plt.figure(figsize=(12, 6))
-
-    colors = {-1: "red", 0: "gray", 1: "green"}
-    labels = {-1: "Negative", 0: "Neutral", 1: "Positive"}
-
-    for s in [-1, 0, 1]:
-
-        if s in monthly_percent.columns:
-
-            plt.plot(
-                monthly_percent.index,
-                monthly_percent[s],
-                marker="o",
-                label=labels[s],
-                color=colors[s]
-            )
-
-    plt.title("Monthly Sentiment Trend")
-    plt.xlabel("Month")
-    plt.ylabel("Percentage")
-
-    plt.legend()
-    plt.grid(True)
-
-    plt.xticks(rotation=45)
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
-
-    img = io.BytesIO()
-
-    plt.savefig(img, format="PNG")
-
-    img.seek(0)
-    plt.close()
-
-    return send_file(img, mimetype="image/png")
-
-@app.route("/generate_keyword_chart", methods=["POST"])
-def generate_keyword_chart():
-
-    data = request.json
-    comments = data.get("comments", [])
-
-    if not comments:
-        return jsonify({"error": "No comments provided"}), 400
-
-    processed = [preprocess_comment(c) for c in comments]
-
-    vectorizer = TfidfVectorizer(
-        stop_words="english",
-        max_features=10
-    )
-
-    X = vectorizer.fit_transform(processed)
-
-    scores = X.sum(axis=0).A1
-    words = vectorizer.get_feature_names_out()
-
-    keyword_scores = sorted(
-        zip(words, scores),
-        key=lambda x: x[1],
-        reverse=True
-    )[:10]
-
-    labels = [k[0] for k in keyword_scores]
-    values = [k[1] for k in keyword_scores]
-
-    plt.figure(figsize=(8,4))
-    plt.bar(labels, values)
-
-    plt.title("Top Keywords")
-    plt.xticks(rotation=45)
-
-    img = io.BytesIO()
-    plt.tight_layout()
-    plt.savefig(img, format="PNG")
-    img.seek(0)
-    plt.close()
-
-    return send_file(img, mimetype="image/png")
-
-@app.route("/topic_sentiment", methods=["POST"])
-def topic_sentiment():
-
-    data = request.json
-    comments = data.get("comments", [])
-
-    if not comments:
-        return jsonify({"topics": []})
-
-    texts = [c["text"] for c in comments]
-
-    processed = [preprocess_comment(t) for t in texts]
-
-    tfidf = TfidfVectorizer(
-        stop_words="english",
-        max_features=100
-    )
-
-    X = tfidf.fit_transform(processed)
-
-    n_clusters = min(3, len(processed))
-
-    kmeans = KMeans(
-        n_clusters=n_clusters,
-        random_state=42,
-        n_init=10
-    )
-
-    clusters = kmeans.fit_predict(X)
-
-    terms = tfidf.get_feature_names_out()
-
-    topics = []
-
-    for i in range(n_clusters):
-
-        idx = [j for j, c in enumerate(clusters) if c == i]
-
-        if not idx:
-            continue
-
-        cluster_comments = [texts[j] for j in idx]
-
-        cluster_processed = [processed[j] for j in idx]
-
-        X_cluster = tfidf.transform(cluster_processed)
-
-        mean_scores = X_cluster.mean(axis=0).A1
-
-        keywords = [
-            terms[j] for j in mean_scores.argsort()[-3:]
-        ]
-
-        topic_name = " ".join(keywords)
-
-        sentiments = []
-
-        for j in idx:
-
-            vec = vectorizer.transform(
-                [processed[j]]
-            )
-
-            pred = model.predict(vec)[0]
-
-            sentiments.append(pred)
-
-        pos = sentiments.count(1)
-        neu = sentiments.count(0)
-        neg = sentiments.count(-1)
-
-        total = len(sentiments)
-
-        sentiment_label = "Neutral"
-
-        if pos >= neu and pos >= neg:
-            sentiment_label = "Positive"
-
-        if neg > pos and neg > neu:
-            sentiment_label = "Negative"
-
-        topics.append({
-            "topic": topic_name.title(),
-            "positive": pos,
-            "neutral": neu,
-            "negative": neg,
-            "total": total,
-            "dominant_sentiment": sentiment_label
-        })
-
-    return jsonify({"topics": topics})
-# ------------------------------------------------
-# Run
-# ------------------------------------------------
 
 if __name__ == "__main__":
-
-    import os
-
-    port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("DEBUG", "false").lower() == "true"
-
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    config = app.config["APP_CONFIG"]
+    app.run(host=config.host, port=config.port, debug=config.debug)

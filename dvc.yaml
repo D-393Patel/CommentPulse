@@ -4,9 +4,17 @@ stages:
     deps:
     - src/data/data_ingestion.py
     params:
+    - data_ingestion.dataset_name
+    - data_ingestion.local_data_path
+    - data_ingestion.data_url
+    - data_ingestion.text_column
+    - data_ingestion.label_column
+    - data_ingestion.label_mapping
     - data_ingestion.test_size
+    - data_ingestion.random_state
     outs:
     - data/raw
+    - reports/data_quality/ingestion_report.json
 
   
   data_preprocessing:
@@ -17,6 +25,7 @@ stages:
     - src/data/data_preprocessing.py
     outs:
     - data/interim
+    - reports/data_quality/preprocessing_report.json
 
 
   
@@ -28,12 +37,15 @@ stages:
     params:
     - model_building.max_features
     - model_building.ngram_range
+    - model_building.validation_size
+    - model_building.candidate_models
     - model_building.learning_rate
     - model_building.max_depth
     - model_building.n_estimators
     outs:
     - lgbm_model.pkl
     - tfidf_vectorizer.pkl
+    - reports/model/model_selection.json
 
 
   
@@ -42,11 +54,13 @@ stages:
     deps:
     - lgbm_model.pkl
     - tfidf_vectorizer.pkl
-    - data/interim/train_processed.csv
     - data/interim/test_processed.csv
     - src/model/model_evaluation.py
     outs:
     - experiment_info.json
+    - reports/model/evaluation_metrics.json
+    - reports/model/confusion_matrix_test.png
+    - reports/model/model_comparison.json
 
 
   model_registration:

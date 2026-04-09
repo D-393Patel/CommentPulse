@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: commentpulse-api
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /readyz
+    envVars:
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: REQUEST_TIMEOUT_SECONDS
+        value: "30"
+      - key: MAX_COMMENTS_PER_REQUEST
+        value: "200"
+      - key: MAX_COMMENT_LENGTH
+        value: "1000"
+      - key: ASYNC_WORKER_COUNT
+        value: "4"
+      - key: JOB_TTL_SECONDS
+        value: "3600"

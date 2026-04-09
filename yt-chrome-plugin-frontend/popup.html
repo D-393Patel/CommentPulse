@@ -13,55 +13,60 @@
     }
 
     body{
-      font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial;
-      background:#0f172a;
+      font-family: "Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,Arial,sans-serif;
+      background:
+        radial-gradient(circle at top right, rgba(56,189,248,0.16), transparent 34%),
+        linear-gradient(180deg, #0f172a 0%, #111827 100%);
       color:#e2e8f0;
-      width:340px;
+      width:360px;
       padding:16px;
     }
-
-    /* HEADER */
 
     .header{
       display:flex;
       align-items:center;
       justify-content:space-between;
-      margin-bottom:16px;
+      margin-bottom:14px;
+      padding:4px 2px 0;
     }
 
     .title{
-      font-size:18px;
-      font-weight:600;
+      font-size:20px;
+      font-weight:700;
       color:white;
+      letter-spacing:0.2px;
     }
 
     .badge{
-      background:#1e293b;
-      padding:4px 8px;
-      border-radius:6px;
-      font-size:11px;
+      background:rgba(56,189,248,0.14);
+      border:1px solid rgba(56,189,248,0.22);
+      padding:5px 9px;
+      border-radius:999px;
+      font-size:10px;
+      font-weight:700;
+      letter-spacing:0.8px;
+      text-transform:uppercase;
       color:#38bdf8;
     }
 
-    /* CARD */
-
     .card{
-      background:#1e293b;
-      border-radius:10px;
-      padding:12px;
+      background:rgba(30,41,59,0.88);
+      border:1px solid rgba(148,163,184,0.12);
+      border-radius:14px;
+      padding:14px;
       margin-bottom:12px;
-      box-shadow:0 4px 14px rgba(0,0,0,0.35);
+      box-shadow:0 12px 30px rgba(2,6,23,0.28);
+      backdrop-filter:blur(10px);
     }
 
     .section-title{
-      font-size:13px;
+      font-size:12px;
       color:#94a3b8;
-      margin-bottom:8px;
+      margin-bottom:10px;
       text-transform:uppercase;
-      letter-spacing:0.6px;
+      letter-spacing:0.9px;
+      font-weight:700;
     }
-
-    /* METRICS */
 
     .metrics{
       display:grid;
@@ -70,45 +75,49 @@
     }
 
     .metric{
-      background:#0f172a;
-      padding:10px;
-      border-radius:8px;
+      background:rgba(15,23,42,0.9);
+      padding:12px 10px;
+      border-radius:12px;
+      border:1px solid rgba(148,163,184,0.08);
       text-align:center;
     }
 
     .metric-value{
-      font-size:22px;
+      font-size:24px;
       font-weight:700;
-      margin-top:4px;
+      margin-top:6px;
       color:#38bdf8;
     }
 
     .metric-title{
       font-size:11px;
       color:#94a3b8;
+      text-transform:uppercase;
+      letter-spacing:0.6px;
     }
 
-    /* COMMENT LIST */
-
     .comment-list{
-      max-height:160px;
+      max-height:180px;
       overflow-y:auto;
       list-style:none;
     }
 
     .comment-item{
-      padding:8px;
-      border-radius:6px;
-      margin-bottom:6px;
+      padding:10px;
+      border-radius:10px;
+      margin-bottom:8px;
       background:#0f172a;
+      border:1px solid rgba(148,163,184,0.08);
       font-size:12px;
-      line-height:1.4;
+      line-height:1.5;
     }
 
     .sentiment{
       font-weight:600;
-      margin-top:4px;
+      margin-top:6px;
       font-size:11px;
+      text-transform:uppercase;
+      letter-spacing:0.6px;
     }
 
     .positive{
@@ -123,23 +132,105 @@
       color:#facc15;
     }
 
-    /* IMAGE */
-
     .chart{
       width:100%;
-      border-radius:8px;
+      border-radius:12px;
       margin-top:8px;
       background:#0f172a;
       padding:6px;
+      min-height:56px;
+      object-fit:cover;
+      border:1px solid rgba(148,163,184,0.08);
     }
-
-    /* LOADING */
 
     .loading{
       text-align:center;
       font-size:12px;
       color:#94a3b8;
-      padding:12px;
+      padding:14px 12px 6px;
+    }
+
+    .summary{
+      font-size:12px;
+      color:#cbd5e1;
+      line-height:1.45;
+      margin-top:2px;
+    }
+
+    .topic-list,
+    .topic-sentiment-list{
+      list-style:none;
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+    }
+
+    .topic-pill,
+    .topic-sentiment-item{
+      background:#0f172a;
+      border:1px solid rgba(148,163,184,0.08);
+      border-radius:999px;
+      padding:7px 10px;
+      font-size:12px;
+      color:#dbeafe;
+      line-height:1.35;
+    }
+
+    .topic-sentiment-item{
+      border-radius:12px;
+      width:100%;
+      color:#e2e8f0;
+    }
+
+    .topic-sentiment-meta{
+      color:#94a3b8;
+      font-size:11px;
+      margin-top:4px;
+    }
+
+    .muted{
+      color:#94a3b8;
+      font-size:12px;
+      line-height:1.45;
+    }
+
+    .settings-row{
+      display:flex;
+      gap:8px;
+      align-items:center;
+    }
+
+    .settings-input{
+      flex:1;
+      background:#0f172a;
+      border:1px solid rgba(148,163,184,0.16);
+      border-radius:10px;
+      color:#e2e8f0;
+      font-size:12px;
+      padding:10px 12px;
+      outline:none;
+    }
+
+    .settings-input:focus{
+      border-color:rgba(56,189,248,0.45);
+    }
+
+    .settings-button{
+      background:#38bdf8;
+      color:#082f49;
+      border:none;
+      border-radius:10px;
+      padding:10px 12px;
+      font-size:12px;
+      font-weight:700;
+      cursor:pointer;
+    }
+
+    .settings-help{
+      margin-top:8px;
+      font-size:11px;
+      color:#94a3b8;
+      line-height:1.4;
     }
 
   </style>
@@ -148,8 +239,27 @@
 <body>
 
   <div class="header">
-    <div class="title">Comment Insights</div>
-    <div class="badge">AI</div>
+    <div>
+      <div class="title">Comment Insights</div>
+      <div class="summary">Live YouTube sentiment and audience signals.</div>
+    </div>
+    <div class="badge">Local AI</div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">API Settings</div>
+    <div class="settings-row">
+      <input
+        id="apiBaseUrlInput"
+        class="settings-input"
+        type="text"
+        placeholder="https://your-tunnel.trycloudflare.com"
+      />
+      <button id="saveApiBaseUrlButton" class="settings-button" type="button">Save</button>
+    </div>
+    <div id="apiBaseUrlHelp" class="settings-help">
+      Saved backend URL. Leave blank to auto-detect from the built-in defaults.
+    </div>
   </div>
 
   <!-- Metrics -->
@@ -182,14 +292,14 @@
     </div>
 
   </div>
-  <div class="card">
+<div class="card">
   <div class="section-title">AI Insights</div>
-  <div id="aiInsights"></div>
+  <div id="aiInsights" class="summary">Generating summary...</div>
 </div>
 
 <div class="card">
   <div class="section-title">Discussion Topics</div>
-  <ul id="topicList"></ul>
+  <ul id="topicList" class="topic-list"></ul>
 </div>
   <!-- Comments -->
 
@@ -234,7 +344,7 @@
     Topic Sentiment Analysis
   </div>
 
-  <ul id="topicSentimentList"></ul>
+  <ul id="topicSentimentList" class="topic-sentiment-list"></ul>
 
 </div>
   <div id="loading" class="loading">Analyzing comments...</div>

@@ -4,18 +4,25 @@ FROM python:3.11-slim-bookworm
 # Set the working directory
 WORKDIR /app
 
+# Make pip more resilient during large dependency downloads in Docker builds.
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DEFAULT_TIMEOUT=300
+ENV PIP_PROGRESS_BAR=off
+
 # Install system dependencies
 # Bookworm is the newer Debian stable, offering better security and package support
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only the requirements file first to leverage Docker layer caching
 # This prevents reinstalling all packages when you change source code
 COPY requirements.txt .
 
-# Install dependencies with --no-cache-dir to keep the image size small
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade packaging tools first, then install dependencies with a longer timeout.
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir --retries 10 --timeout 300 -r requirements.txt
 
 # Copy the rest of the source code
 COPY . .
