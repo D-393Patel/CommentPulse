@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, Response, g, jsonify, request, send_file, url_for
+from flask import Flask, Response, g, jsonify, render_template_string, request, send_file, url_for
 from flask_cors import CORS
 from requests import Response as RequestsResponse
 from analytics_runtime import AnalyticsRuntime, create_job_handlers
@@ -738,14 +738,217 @@ def create_app() -> Flask:
 
     @app.route("/")
     def home() -> Response:
-        return jsonify(
-            {
-                "message": "YouTube Sentiment API Running",
-                "service": "youtube-sentiment-api",
-                "version": "3.0",
-                "async_jobs": True,
-                "local_only_insights": True,
-            }
+        return Response(
+            render_template_string(
+                """
+                <!doctype html>
+                <html lang="en">
+                  <head>
+                    <meta charset="utf-8" />
+                    <meta name="viewport" content="width=device-width, initial-scale=1" />
+                    <title>CommentPulse</title>
+                    <style>
+                      :root {
+                        color-scheme: dark;
+                        --bg: #0f172a;
+                        --panel: rgba(30, 41, 59, 0.9);
+                        --panel-border: rgba(148, 163, 184, 0.16);
+                        --text: #e2e8f0;
+                        --muted: #94a3b8;
+                        --accent: #38bdf8;
+                        --accent-strong: #0ea5e9;
+                      }
+
+                      * { box-sizing: border-box; }
+
+                      body {
+                        margin: 0;
+                        font-family: "Segoe UI", Arial, sans-serif;
+                        background:
+                          radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 30%),
+                          linear-gradient(180deg, #0f172a 0%, #111827 100%);
+                        color: var(--text);
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        padding: 32px 16px;
+                      }
+
+                      .shell {
+                        width: min(920px, 100%);
+                        display: grid;
+                        gap: 18px;
+                      }
+
+                      .hero, .panel {
+                        background: var(--panel);
+                        border: 1px solid var(--panel-border);
+                        border-radius: 22px;
+                        box-shadow: 0 20px 45px rgba(2, 6, 23, 0.28);
+                        backdrop-filter: blur(10px);
+                      }
+
+                      .hero {
+                        padding: 28px;
+                      }
+
+                      .badge {
+                        display: inline-block;
+                        font-size: 11px;
+                        letter-spacing: 0.14em;
+                        text-transform: uppercase;
+                        font-weight: 700;
+                        color: var(--accent);
+                        background: rgba(56, 189, 248, 0.12);
+                        border: 1px solid rgba(56, 189, 248, 0.24);
+                        border-radius: 999px;
+                        padding: 7px 12px;
+                        margin-bottom: 16px;
+                      }
+
+                      h1 {
+                        margin: 0 0 10px;
+                        font-size: clamp(34px, 6vw, 54px);
+                        line-height: 1.02;
+                      }
+
+                      .subtitle {
+                        margin: 0;
+                        color: var(--muted);
+                        font-size: 17px;
+                        line-height: 1.6;
+                        max-width: 700px;
+                      }
+
+                      .cta-row, .meta-grid, .link-grid {
+                        display: grid;
+                        gap: 14px;
+                      }
+
+                      .cta-row {
+                        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+                        margin-top: 24px;
+                      }
+
+                      .link-grid {
+                        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                      }
+
+                      .panel {
+                        padding: 22px;
+                      }
+
+                      .panel h2 {
+                        margin: 0 0 16px;
+                        font-size: 18px;
+                      }
+
+                      .meta-grid {
+                        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+                      }
+
+                      .metric {
+                        background: rgba(15, 23, 42, 0.92);
+                        border: 1px solid rgba(148, 163, 184, 0.1);
+                        border-radius: 16px;
+                        padding: 16px;
+                      }
+
+                      .metric-label {
+                        color: var(--muted);
+                        font-size: 12px;
+                        text-transform: uppercase;
+                        letter-spacing: 0.08em;
+                        margin-bottom: 8px;
+                      }
+
+                      .metric-value {
+                        font-size: 20px;
+                        font-weight: 700;
+                      }
+
+                      a.card-link {
+                        text-decoration: none;
+                        color: var(--text);
+                        display: block;
+                        background: rgba(15, 23, 42, 0.92);
+                        border: 1px solid rgba(148, 163, 184, 0.1);
+                        border-radius: 16px;
+                        padding: 16px;
+                        transition: transform 0.16s ease, border-color 0.16s ease;
+                      }
+
+                      a.card-link:hover {
+                        transform: translateY(-2px);
+                        border-color: rgba(56, 189, 248, 0.35);
+                      }
+
+                      .link-title {
+                        font-size: 15px;
+                        font-weight: 700;
+                        margin-bottom: 6px;
+                      }
+
+                      .link-body {
+                        color: var(--muted);
+                        font-size: 13px;
+                        line-height: 1.5;
+                      }
+                    </style>
+                  </head>
+                  <body>
+                    <main class="shell">
+                      <section class="hero">
+                        <div class="badge">CommentPulse</div>
+                        <h1>YouTube Comment Sentiment Platform</h1>
+                        <p class="subtitle">
+                          A production-style ML system for analyzing YouTube comments with sentiment prediction,
+                          topic extraction, async analytics jobs, observability, and Chrome extension integration.
+                        </p>
+                        <div class="cta-row">
+                          <a class="card-link" href="/readyz">
+                            <div class="link-title">Service Status</div>
+                            <div class="link-body">Check readiness, model loading, and deployment health.</div>
+                          </a>
+                          <a class="card-link" href="/metrics">
+                            <div class="link-title">Metrics</div>
+                            <div class="link-body">Inspect Prometheus-compatible operational metrics.</div>
+                          </a>
+                          <a class="card-link" href="https://github.com/D-393Patel/CommentPulse" target="_blank" rel="noreferrer">
+                            <div class="link-title">GitHub Repository</div>
+                            <div class="link-body">Explore the codebase, pipeline, tests, and deployment setup.</div>
+                          </a>
+                        </div>
+                      </section>
+
+                      <section class="panel">
+                        <h2>System Snapshot</h2>
+                        <div class="meta-grid">
+                          <div class="metric">
+                            <div class="metric-label">Service</div>
+                            <div class="metric-value">youtube-sentiment-api</div>
+                          </div>
+                          <div class="metric">
+                            <div class="metric-label">Version</div>
+                            <div class="metric-value">3.0</div>
+                          </div>
+                          <div class="metric">
+                            <div class="metric-label">Async Jobs</div>
+                            <div class="metric-value">Enabled</div>
+                          </div>
+                          <div class="metric">
+                            <div class="metric-label">Insights Mode</div>
+                            <div class="metric-value">Local Only</div>
+                          </div>
+                        </div>
+                      </section>
+                    </main>
+                  </body>
+                </html>
+                """
+            ),
+            mimetype="text/html",
         )
 
     @app.route("/health")
