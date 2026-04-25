@@ -1,4 +1,9 @@
 services:
+  - type: keyvalue
+    name: commentpulse-redis
+    plan: free
+    ipAllowList: []
+
   - type: web
     name: commentpulse-api
     runtime: docker
@@ -20,3 +25,47 @@ services:
         value: "4"
       - key: JOB_TTL_SECONDS
         value: "3600"
+      - key: MAX_JOB_ATTEMPTS
+        value: "3"
+      - key: JOB_QUEUE_NAME
+        value: "analytics_jobs"
+      - key: DEAD_LETTER_QUEUE_NAME
+        value: "analytics_jobs_dead_letter"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: commentpulse-redis
+          property: connectionString
+
+  - type: worker
+    name: commentpulse-worker
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    dockerCommand: python worker.py
+    envVars:
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: REQUEST_TIMEOUT_SECONDS
+        value: "30"
+      - key: MAX_COMMENTS_PER_REQUEST
+        value: "200"
+      - key: MAX_COMMENT_LENGTH
+        value: "1000"
+      - key: ASYNC_WORKER_COUNT
+        value: "4"
+      - key: JOB_TTL_SECONDS
+        value: "3600"
+      - key: MAX_JOB_ATTEMPTS
+        value: "3"
+      - key: JOB_QUEUE_NAME
+        value: "analytics_jobs"
+      - key: DEAD_LETTER_QUEUE_NAME
+        value: "analytics_jobs_dead_letter"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: commentpulse-redis
+          property: connectionString

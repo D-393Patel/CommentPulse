@@ -738,6 +738,14 @@ def create_app() -> Flask:
 
     @app.route("/")
     def home() -> Response:
+        full_async_deployment = job_backend == "redis"
+        deployment_mode = "Full async stack" if full_async_deployment else "Single-service ML demo"
+        job_backend_label = "Redis-backed worker" if full_async_deployment else "Local async executor"
+        runtime_copy = (
+            "This deployment includes shared Redis queueing and a dedicated worker process."
+            if full_async_deployment
+            else "This public deployment runs the web service with local async execution. The repo also includes a full Docker and worker-based deployment path."
+        )
         return Response(
             render_template_string(
                 """
@@ -1222,9 +1230,8 @@ def create_app() -> Flask:
                             <div class="badge">CommentPulse</div>
                             <h1>Live Sentiment Inference for YouTube-Style Comments</h1>
                             <p class="subtitle">
-                              A production-style ML application with model-backed sentiment prediction, async analytics,
-                              Redis worker support, observability, and a Chrome extension workflow built around real
-                              comment analysis.
+                              A production-style ML application with live model inference, async analytics, observability,
+                              and a Chrome extension workflow built around real comment analysis.
                             </p>
                             <div class="stats-grid">
                               <div class="stat-card positive">
@@ -1306,7 +1313,12 @@ This helped me understand the concept much faster."></textarea>
                           <section class="panel">
                             <div class="eyebrow">System Snapshot</div>
                             <h2>Deployment + Runtime</h2>
+                            <p class="empty-state" style="margin-bottom:16px;">{{ runtime_copy }}</p>
                             <div class="meta-grid">
+                              <div class="metric">
+                                <div class="metric-label">Deployment Mode</div>
+                                <div class="metric-value">{{ deployment_mode }}</div>
+                              </div>
                               <div class="metric">
                                 <div class="metric-label">Service</div>
                                 <div class="metric-value">youtube-sentiment-api</div>
@@ -1321,7 +1333,7 @@ This helped me understand the concept much faster."></textarea>
                               </div>
                               <div class="metric">
                                 <div class="metric-label">Job Backend</div>
-                                <div class="metric-value">Render + Local Async</div>
+                                <div class="metric-value">{{ job_backend_label }}</div>
                               </div>
                             </div>
                           </section>
@@ -1348,7 +1360,7 @@ This helped me understand the concept much faster."></textarea>
                                 <div class="architecture-step-index">3</div>
                                 <div>
                                   <h3>Async analytics</h3>
-                                  <p>Heavier jobs like insights, topics, trend charts, and word clouds run asynchronously so the prediction path stays fast.</p>
+                                  <p>Heavier jobs like insights, topics, trend charts, and word clouds run asynchronously so the prediction path stays fast. In the full stack deployment, these can run through a Redis-backed worker flow.</p>
                                 </div>
                               </div>
                               <div class="architecture-step">
@@ -1520,6 +1532,10 @@ This helped me understand the concept much faster."></textarea>
                   </body>
                 </html>
                 """
+            ,
+                deployment_mode=deployment_mode,
+                job_backend_label=job_backend_label,
+                runtime_copy=runtime_copy,
             ),
             mimetype="text/html",
         )
