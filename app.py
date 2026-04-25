@@ -750,13 +750,19 @@ def create_app() -> Flask:
                     <style>
                       :root {
                         color-scheme: dark;
-                        --bg: #0f172a;
-                        --panel: rgba(30, 41, 59, 0.9);
-                        --panel-border: rgba(148, 163, 184, 0.16);
+                        --bg: #07111f;
+                        --bg-soft: #0f1b2d;
+                        --panel: rgba(15, 23, 42, 0.82);
+                        --panel-strong: rgba(10, 16, 29, 0.92);
+                        --panel-border: rgba(148, 163, 184, 0.14);
                         --text: #e2e8f0;
-                        --muted: #94a3b8;
+                        --muted: #8aa0bb;
                         --accent: #38bdf8;
                         --accent-strong: #0ea5e9;
+                        --positive: #22c55e;
+                        --neutral: #f59e0b;
+                        --negative: #ef4444;
+                        --shadow: 0 28px 50px rgba(2, 6, 23, 0.34);
                       }
 
                       * { box-sizing: border-box; }
@@ -765,18 +771,17 @@ def create_app() -> Flask:
                         margin: 0;
                         font-family: "Segoe UI", Arial, sans-serif;
                         background:
-                          radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 30%),
-                          linear-gradient(180deg, #0f172a 0%, #111827 100%);
+                          radial-gradient(circle at top left, rgba(14, 165, 233, 0.18), transparent 28%),
+                          radial-gradient(circle at 85% 15%, rgba(34, 197, 94, 0.12), transparent 18%),
+                          linear-gradient(180deg, #07111f 0%, #0b1220 100%);
                         color: var(--text);
                         min-height: 100vh;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        padding: 32px 16px;
+                        padding: 28px 16px 40px;
                       }
 
                       .shell {
-                        width: min(920px, 100%);
+                        width: min(1180px, 100%);
+                        margin: 0 auto;
                         display: grid;
                         gap: 18px;
                       }
@@ -784,13 +789,24 @@ def create_app() -> Flask:
                       .hero, .panel {
                         background: var(--panel);
                         border: 1px solid var(--panel-border);
-                        border-radius: 22px;
-                        box-shadow: 0 20px 45px rgba(2, 6, 23, 0.28);
-                        backdrop-filter: blur(10px);
+                        border-radius: 24px;
+                        box-shadow: var(--shadow);
+                        backdrop-filter: blur(12px);
                       }
 
                       .hero {
-                        padding: 28px;
+                        padding: 30px;
+                        overflow: hidden;
+                        position: relative;
+                      }
+
+                      .hero::after {
+                        content: "";
+                        position: absolute;
+                        inset: auto -20% -40% 38%;
+                        height: 320px;
+                        background: radial-gradient(circle, rgba(56, 189, 248, 0.16), transparent 60%);
+                        pointer-events: none;
                       }
 
                       .badge {
@@ -807,9 +823,16 @@ def create_app() -> Flask:
                         margin-bottom: 16px;
                       }
 
+                      .hero-grid {
+                        display: grid;
+                        grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+                        gap: 22px;
+                        align-items: stretch;
+                      }
+
                       h1 {
                         margin: 0 0 10px;
-                        font-size: clamp(34px, 6vw, 54px);
+                        font-size: clamp(34px, 5vw, 58px);
                         line-height: 1.02;
                       }
 
@@ -821,7 +844,7 @@ def create_app() -> Flask:
                         max-width: 700px;
                       }
 
-                      .cta-row, .meta-grid, .link-grid {
+                      .cta-row, .meta-grid, .link-grid, .stats-grid, .detail-grid {
                         display: grid;
                         gap: 14px;
                       }
@@ -835,6 +858,15 @@ def create_app() -> Flask:
                         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
                       }
 
+                      .stats-grid {
+                        grid-template-columns: repeat(3, minmax(0, 1fr));
+                        margin-top: 22px;
+                      }
+
+                      .detail-grid {
+                        grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
+                      }
+
                       .panel {
                         padding: 22px;
                       }
@@ -844,11 +876,20 @@ def create_app() -> Flask:
                         font-size: 18px;
                       }
 
+                      .eyebrow {
+                        color: var(--accent);
+                        font-size: 11px;
+                        text-transform: uppercase;
+                        letter-spacing: 0.12em;
+                        font-weight: 700;
+                        margin-bottom: 10px;
+                      }
+
                       .meta-grid {
                         grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
                       }
 
-                      .metric {
+                      .metric, .stat-card {
                         background: rgba(15, 23, 42, 0.92);
                         border: 1px solid rgba(148, 163, 184, 0.1);
                         border-radius: 16px;
@@ -868,6 +909,130 @@ def create_app() -> Flask:
                         font-weight: 700;
                       }
 
+                      .stat-card {
+                        min-height: 118px;
+                        display: grid;
+                        align-content: center;
+                        gap: 6px;
+                      }
+
+                      .stat-card.positive { border-color: rgba(34, 197, 94, 0.26); }
+                      .stat-card.neutral { border-color: rgba(245, 158, 11, 0.24); }
+                      .stat-card.negative { border-color: rgba(239, 68, 68, 0.24); }
+
+                      .stat-label {
+                        color: var(--muted);
+                        font-size: 12px;
+                        letter-spacing: 0.08em;
+                        text-transform: uppercase;
+                      }
+
+                      .stat-value {
+                        font-size: 38px;
+                        font-weight: 800;
+                        line-height: 1;
+                      }
+
+                      .stat-value.positive { color: var(--positive); }
+                      .stat-value.neutral { color: var(--neutral); }
+                      .stat-value.negative { color: var(--negative); }
+
+                      .demo-shell {
+                        background: linear-gradient(180deg, rgba(2, 6, 23, 0.9), rgba(15, 23, 42, 0.92));
+                        border: 1px solid rgba(148, 163, 184, 0.14);
+                        border-radius: 22px;
+                        padding: 18px;
+                        position: relative;
+                        z-index: 1;
+                      }
+
+                      .demo-shell h2 {
+                        margin: 0 0 8px;
+                        font-size: 20px;
+                      }
+
+                      .demo-copy {
+                        color: var(--muted);
+                        font-size: 14px;
+                        line-height: 1.6;
+                        margin: 0 0 14px;
+                      }
+
+                      textarea {
+                        width: 100%;
+                        min-height: 200px;
+                        resize: vertical;
+                        border: 1px solid rgba(148, 163, 184, 0.14);
+                        border-radius: 16px;
+                        background: rgba(7, 18, 33, 0.95);
+                        color: var(--text);
+                        padding: 14px 16px;
+                        font: inherit;
+                        line-height: 1.55;
+                      }
+
+                      textarea:focus, button:focus, a:focus {
+                        outline: 2px solid rgba(56, 189, 248, 0.48);
+                        outline-offset: 2px;
+                      }
+
+                      .demo-actions {
+                        display: flex;
+                        flex-wrap: wrap;
+                        gap: 12px;
+                        margin-top: 14px;
+                        align-items: center;
+                      }
+
+                      button, .button-link {
+                        appearance: none;
+                        border: 0;
+                        border-radius: 14px;
+                        padding: 12px 16px;
+                        font: inherit;
+                        font-weight: 700;
+                        cursor: pointer;
+                        transition: transform 0.16s ease, opacity 0.16s ease, background 0.16s ease;
+                      }
+
+                      button:hover, .button-link:hover {
+                        transform: translateY(-1px);
+                      }
+
+                      .primary-button {
+                        background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+                        color: #04111f;
+                      }
+
+                      .secondary-button {
+                        background: rgba(56, 189, 248, 0.12);
+                        color: var(--text);
+                        border: 1px solid rgba(56, 189, 248, 0.18);
+                      }
+
+                      .status-pill {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 8px;
+                        padding: 10px 12px;
+                        border-radius: 999px;
+                        font-size: 12px;
+                        color: var(--muted);
+                        background: rgba(15, 23, 42, 0.72);
+                        border: 1px solid rgba(148, 163, 184, 0.12);
+                      }
+
+                      .status-dot {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 50%;
+                        background: var(--neutral);
+                        box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.08);
+                      }
+
+                      .status-dot.ready { background: var(--positive); box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.08); }
+                      .status-dot.error { background: var(--negative); box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.08); }
+
                       a.card-link {
                         text-decoration: none;
                         color: var(--text);
@@ -884,6 +1049,10 @@ def create_app() -> Flask:
                         border-color: rgba(56, 189, 248, 0.35);
                       }
 
+                      a.card-link {
+                        min-height: 112px;
+                      }
+
                       .link-title {
                         font-size: 15px;
                         font-weight: 700;
@@ -895,55 +1064,459 @@ def create_app() -> Flask:
                         font-size: 13px;
                         line-height: 1.5;
                       }
+
+                      .predictions {
+                        display: grid;
+                        gap: 10px;
+                        margin-top: 16px;
+                        max-height: 320px;
+                        overflow: auto;
+                        padding-right: 4px;
+                      }
+
+                      .prediction-item {
+                        display: grid;
+                        gap: 8px;
+                        background: rgba(8, 15, 28, 0.92);
+                        border: 1px solid rgba(148, 163, 184, 0.1);
+                        border-radius: 16px;
+                        padding: 14px;
+                      }
+
+                      .prediction-meta {
+                        display: flex;
+                        justify-content: space-between;
+                        gap: 10px;
+                        align-items: center;
+                      }
+
+                      .sentiment-chip {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 8px;
+                        border-radius: 999px;
+                        padding: 7px 10px;
+                        font-size: 11px;
+                        letter-spacing: 0.08em;
+                        text-transform: uppercase;
+                        font-weight: 700;
+                      }
+
+                      .sentiment-chip.positive {
+                        background: rgba(34, 197, 94, 0.14);
+                        color: #b8f7cb;
+                        border: 1px solid rgba(34, 197, 94, 0.22);
+                      }
+
+                      .sentiment-chip.neutral {
+                        background: rgba(245, 158, 11, 0.14);
+                        color: #fde3a7;
+                        border: 1px solid rgba(245, 158, 11, 0.2);
+                      }
+
+                      .sentiment-chip.negative {
+                        background: rgba(239, 68, 68, 0.14);
+                        color: #fecaca;
+                        border: 1px solid rgba(239, 68, 68, 0.2);
+                      }
+
+                      .prediction-time {
+                        color: var(--muted);
+                        font-size: 12px;
+                      }
+
+                      .prediction-text {
+                        margin: 0;
+                        font-size: 14px;
+                        line-height: 1.55;
+                        color: var(--text);
+                      }
+
+                      .stack {
+                        display: grid;
+                        gap: 18px;
+                      }
+
+                      .architecture-list {
+                        display: grid;
+                        gap: 12px;
+                      }
+
+                      .architecture-step {
+                        display: grid;
+                        grid-template-columns: 34px 1fr;
+                        gap: 12px;
+                        align-items: start;
+                      }
+
+                      .architecture-step-index {
+                        width: 34px;
+                        height: 34px;
+                        border-radius: 12px;
+                        background: rgba(56, 189, 248, 0.12);
+                        border: 1px solid rgba(56, 189, 248, 0.2);
+                        display: grid;
+                        place-items: center;
+                        color: var(--accent);
+                        font-size: 13px;
+                        font-weight: 800;
+                      }
+
+                      .architecture-step h3 {
+                        margin: 0 0 4px;
+                        font-size: 15px;
+                      }
+
+                      .architecture-step p {
+                        margin: 0;
+                        color: var(--muted);
+                        font-size: 13px;
+                        line-height: 1.55;
+                      }
+
+                      .empty-state {
+                        color: var(--muted);
+                        font-size: 14px;
+                        line-height: 1.6;
+                        margin: 0;
+                      }
+
+                      .footnote {
+                        color: var(--muted);
+                        font-size: 12px;
+                        line-height: 1.6;
+                        margin-top: 14px;
+                      }
+
+                      @media (max-width: 920px) {
+                        .hero-grid,
+                        .detail-grid {
+                          grid-template-columns: 1fr;
+                        }
+
+                        .stats-grid {
+                          grid-template-columns: 1fr;
+                        }
+                      }
+
+                      @media (max-width: 640px) {
+                        body {
+                          padding: 18px 12px 28px;
+                        }
+
+                        .hero, .panel {
+                          border-radius: 20px;
+                        }
+
+                        .hero, .panel {
+                          padding: 18px;
+                        }
+                      }
                     </style>
                   </head>
                   <body>
                     <main class="shell">
                       <section class="hero">
-                        <div class="badge">CommentPulse</div>
-                        <h1>YouTube Comment Sentiment Platform</h1>
-                        <p class="subtitle">
-                          A production-style ML system for analyzing YouTube comments with sentiment prediction,
-                          topic extraction, async analytics jobs, observability, and Chrome extension integration.
-                        </p>
-                        <div class="cta-row">
-                          <a class="card-link" href="/readyz">
-                            <div class="link-title">Service Status</div>
-                            <div class="link-body">Check readiness, model loading, and deployment health.</div>
-                          </a>
-                          <a class="card-link" href="/metrics">
-                            <div class="link-title">Metrics</div>
-                            <div class="link-body">Inspect Prometheus-compatible operational metrics.</div>
-                          </a>
-                          <a class="card-link" href="https://github.com/D-393Patel/CommentPulse" target="_blank" rel="noreferrer">
-                            <div class="link-title">GitHub Repository</div>
-                            <div class="link-body">Explore the codebase, pipeline, tests, and deployment setup.</div>
-                          </a>
+                        <div class="hero-grid">
+                          <div>
+                            <div class="badge">CommentPulse</div>
+                            <h1>Live Sentiment Inference for YouTube-Style Comments</h1>
+                            <p class="subtitle">
+                              A production-style ML application with model-backed sentiment prediction, async analytics,
+                              Redis worker support, observability, and a Chrome extension workflow built around real
+                              comment analysis.
+                            </p>
+                            <div class="stats-grid">
+                              <div class="stat-card positive">
+                                <div class="stat-label">Throughput</div>
+                                <div class="stat-value positive">77.4</div>
+                                <div class="link-body">req/s after hot-path optimization in local load testing</div>
+                              </div>
+                              <div class="stat-card neutral">
+                                <div class="stat-label">Latency</div>
+                                <div class="stat-value neutral">249ms</div>
+                                <div class="link-body">p95 latency on the optimized local benchmark</div>
+                              </div>
+                              <div class="stat-card negative">
+                                <div class="stat-label">Reliability</div>
+                                <div class="stat-value negative">0%</div>
+                                <div class="link-body">request failures in the verified optimized test run</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div class="demo-shell">
+                            <div class="eyebrow">Live Model Demo</div>
+                            <h2>Try the deployed classifier</h2>
+                            <p class="demo-copy">
+                              Paste one comment per line and run inference against the live backend.
+                              This uses the same prediction API exposed to the extension workflow.
+                            </p>
+                            <textarea id="commentsInput" spellcheck="false" placeholder="Great tutorial and very clear explanations.
+The video was useful but the audio quality needs work.
+This helped me understand the concept much faster."></textarea>
+                            <div class="demo-actions">
+                              <button class="primary-button" id="runDemoButton" type="button">Run Sentiment Inference</button>
+                              <button class="secondary-button" id="sampleButton" type="button">Load Sample Comments</button>
+                              <div class="status-pill">
+                                <span class="status-dot" id="statusDot"></span>
+                                <span id="statusText">Ready for input</span>
+                              </div>
+                            </div>
+                            <p class="footnote">
+                              The deployed app accepts timestamped comments. This demo generates timestamps automatically
+                              on the client so you can try the live model directly from the homepage.
+                            </p>
+                          </div>
                         </div>
                       </section>
 
-                      <section class="panel">
-                        <h2>System Snapshot</h2>
-                        <div class="meta-grid">
-                          <div class="metric">
-                            <div class="metric-label">Service</div>
-                            <div class="metric-value">youtube-sentiment-api</div>
+                      <section class="detail-grid">
+                        <div class="panel stack">
+                          <div>
+                            <div class="eyebrow">Inference Output</div>
+                            <h2>Prediction Summary</h2>
+                            <div class="meta-grid">
+                              <div class="metric">
+                                <div class="metric-label">Positive</div>
+                                <div class="metric-value" id="positiveCount">0</div>
+                              </div>
+                              <div class="metric">
+                                <div class="metric-label">Neutral</div>
+                                <div class="metric-value" id="neutralCount">0</div>
+                              </div>
+                              <div class="metric">
+                                <div class="metric-label">Negative</div>
+                                <div class="metric-value" id="negativeCount">0</div>
+                              </div>
+                            </div>
                           </div>
-                          <div class="metric">
-                            <div class="metric-label">Version</div>
-                            <div class="metric-value">3.0</div>
+
+                          <div>
+                            <div class="eyebrow">Predictions</div>
+                            <h2>Comment-Level Results</h2>
+                            <p class="empty-state" id="predictionsEmpty">
+                              Run the demo above to see model predictions for each input comment.
+                            </p>
+                            <div class="predictions" id="predictionsList"></div>
                           </div>
-                          <div class="metric">
-                            <div class="metric-label">Async Jobs</div>
-                            <div class="metric-value">Enabled</div>
-                          </div>
-                          <div class="metric">
-                            <div class="metric-label">Insights Mode</div>
-                            <div class="metric-value">Local Only</div>
-                          </div>
+                        </div>
+
+                        <div class="stack">
+                          <section class="panel">
+                            <div class="eyebrow">System Snapshot</div>
+                            <h2>Deployment + Runtime</h2>
+                            <div class="meta-grid">
+                              <div class="metric">
+                                <div class="metric-label">Service</div>
+                                <div class="metric-value">youtube-sentiment-api</div>
+                              </div>
+                              <div class="metric">
+                                <div class="metric-label">Version</div>
+                                <div class="metric-value">3.0</div>
+                              </div>
+                              <div class="metric">
+                                <div class="metric-label">Async Jobs</div>
+                                <div class="metric-value">Enabled</div>
+                              </div>
+                              <div class="metric">
+                                <div class="metric-label">Job Backend</div>
+                                <div class="metric-value">Render + Local Async</div>
+                              </div>
+                            </div>
+                          </section>
+
+                          <section class="panel">
+                            <div class="eyebrow">Architecture</div>
+                            <h2>How the system works</h2>
+                            <div class="architecture-list">
+                              <div class="architecture-step">
+                                <div class="architecture-step-index">1</div>
+                                <div>
+                                  <h3>Comment ingestion</h3>
+                                  <p>The Chrome extension or homepage demo sends comments to the Flask API after client-side sanitization.</p>
+                                </div>
+                              </div>
+                              <div class="architecture-step">
+                                <div class="architecture-step-index">2</div>
+                                <div>
+                                  <h3>Model inference</h3>
+                                  <p>The backend loads a TF-IDF vectorizer and trained classifier to predict positive, neutral, or negative sentiment.</p>
+                                </div>
+                              </div>
+                              <div class="architecture-step">
+                                <div class="architecture-step-index">3</div>
+                                <div>
+                                  <h3>Async analytics</h3>
+                                  <p>Heavier jobs like insights, topics, trend charts, and word clouds run asynchronously so the prediction path stays fast.</p>
+                                </div>
+                              </div>
+                              <div class="architecture-step">
+                                <div class="architecture-step-index">4</div>
+                                <div>
+                                  <h3>Observability + ops</h3>
+                                  <p>Health checks, Prometheus metrics, retries, dead-letter handling, and deployment validation make the system easier to operate.</p>
+                                </div>
+                              </div>
+                            </div>
+                          </section>
+
+                          <section class="panel">
+                            <div class="eyebrow">Explore</div>
+                            <h2>Project Links</h2>
+                            <div class="link-grid">
+                              <a class="card-link" href="/readyz">
+                                <div class="link-title">Readiness Check</div>
+                                <div class="link-body">Verify model loading, async capabilities, and deployment health.</div>
+                              </a>
+                              <a class="card-link" href="/metrics">
+                                <div class="link-title">Metrics Endpoint</div>
+                                <div class="link-body">Inspect Prometheus-compatible request and runtime metrics.</div>
+                              </a>
+                              <a class="card-link" href="https://github.com/D-393Patel/CommentPulse" target="_blank" rel="noreferrer">
+                                <div class="link-title">GitHub Repository</div>
+                                <div class="link-body">Review the codebase, tests, Docker setup, CI, and ML pipeline.</div>
+                              </a>
+                            </div>
+                          </section>
                         </div>
                       </section>
                     </main>
+                    <script>
+                      const sampleComments = [
+                        "Great tutorial and very clear explanations.",
+                        "The video was useful but the audio quality needs work.",
+                        "This helped me understand the concept much faster.",
+                        "Not bad, but I expected better examples in the second half."
+                      ];
+
+                      const commentsInput = document.getElementById("commentsInput");
+                      const runDemoButton = document.getElementById("runDemoButton");
+                      const sampleButton = document.getElementById("sampleButton");
+                      const statusText = document.getElementById("statusText");
+                      const statusDot = document.getElementById("statusDot");
+                      const positiveCount = document.getElementById("positiveCount");
+                      const neutralCount = document.getElementById("neutralCount");
+                      const negativeCount = document.getElementById("negativeCount");
+                      const predictionsList = document.getElementById("predictionsList");
+                      const predictionsEmpty = document.getElementById("predictionsEmpty");
+
+                      function setStatus(message, state) {
+                        statusText.textContent = message;
+                        statusDot.className = "status-dot";
+                        if (state) {
+                          statusDot.classList.add(state);
+                        }
+                      }
+
+                      function sentimentMeta(sentiment) {
+                        if (sentiment === 1) {
+                          return { label: "Positive", className: "positive" };
+                        }
+                        if (sentiment === -1) {
+                          return { label: "Negative", className: "negative" };
+                        }
+                        return { label: "Neutral", className: "neutral" };
+                      }
+
+                      function buildPayload(lines) {
+                        const now = Date.now();
+                        return {
+                          comments: lines.map((text, index) => ({
+                            text,
+                            timestamp: new Date(now + index * 60000).toISOString()
+                          }))
+                        };
+                      }
+
+                      function renderPredictions(predictions) {
+                        let positive = 0;
+                        let neutral = 0;
+                        let negative = 0;
+
+                        predictionsList.innerHTML = "";
+
+                        predictions.forEach((item) => {
+                          const meta = sentimentMeta(item.sentiment);
+                          if (item.sentiment === 1) positive += 1;
+                          else if (item.sentiment === -1) negative += 1;
+                          else neutral += 1;
+
+                          const card = document.createElement("article");
+                          card.className = "prediction-item";
+                          card.innerHTML = `
+                            <div class="prediction-meta">
+                              <span class="sentiment-chip ${meta.className}">${meta.label}</span>
+                              <span class="prediction-time">${new Date(item.timestamp).toLocaleString()}</span>
+                            </div>
+                            <p class="prediction-text"></p>
+                          `;
+                          card.querySelector(".prediction-text").textContent = item.comment;
+                          predictionsList.appendChild(card);
+                        });
+
+                        positiveCount.textContent = String(positive);
+                        neutralCount.textContent = String(neutral);
+                        negativeCount.textContent = String(negative);
+                        predictionsEmpty.style.display = predictions.length ? "none" : "block";
+                      }
+
+                      async function runDemo() {
+                        const lines = commentsInput.value
+                          .split(/\\r?\\n/)
+                          .map((line) => line.trim())
+                          .filter(Boolean);
+
+                        if (!lines.length) {
+                          setStatus("Add at least one comment to run inference.", "error");
+                          return;
+                        }
+
+                        runDemoButton.disabled = true;
+                        runDemoButton.textContent = "Running...";
+                        setStatus("Calling live prediction API...", null);
+
+                        try {
+                          const response = await fetch("/predict_with_timestamps", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(buildPayload(lines))
+                          });
+
+                          if (!response.ok) {
+                            let message = "Inference request failed.";
+                            try {
+                              const errorPayload = await response.json();
+                              message = errorPayload?.error?.message || message;
+                            } catch (_error) {
+                              // ignore JSON parse errors
+                            }
+                            throw new Error(message);
+                          }
+
+                          const predictions = await response.json();
+                          renderPredictions(Array.isArray(predictions) ? predictions : []);
+                          setStatus(`Completed live inference for ${lines.length} comment${lines.length === 1 ? "" : "s"}.`, "ready");
+                        } catch (error) {
+                          predictionsList.innerHTML = "";
+                          positiveCount.textContent = "0";
+                          neutralCount.textContent = "0";
+                          negativeCount.textContent = "0";
+                          predictionsEmpty.style.display = "block";
+                          setStatus(error.message || "Something went wrong during inference.", "error");
+                        } finally {
+                          runDemoButton.disabled = false;
+                          runDemoButton.textContent = "Run Sentiment Inference";
+                        }
+                      }
+
+                      sampleButton.addEventListener("click", () => {
+                        commentsInput.value = sampleComments.join("\\n");
+                        setStatus("Loaded sample comments. Run the model when you're ready.", null);
+                      });
+
+                      runDemoButton.addEventListener("click", runDemo);
+                    </script>
                   </body>
                 </html>
                 """
