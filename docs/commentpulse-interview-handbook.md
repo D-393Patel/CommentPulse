@@ -1597,3 +1597,507 @@ flowchart TD
 ```
 
 Interview Summary: The popup renders progressively: backend, comments, predictions, then analytics.
+
+## Resume Defense Addendum - Exact Resume Lines
+
+This addendum prepares you to defend the exact resume entry below. Every claim is tied to code that exists in the repository.
+
+```latex
+\resumeProjectHeading
+{\textbf{CommentPulse -- YouTube Comment Sentiment Platform} \hspace{6pt}
+\href{https://github.com/D-393Patel/CommentPulse}{ GitHub }
+\hspace{6pt} \href{https://commentpulse-v4zk.onrender.com/}{ Live }}{Jan 2026 -- Feb 2026}
+\vspace{-6pt}
+\begin{itemize}[leftmargin=0.25in]
+\small{
+\item \textbf{Tech:} Python, Flask, Redis, Docker, HTML5, CSS3, JavaScript, scikit-learn
+\item Built a Chrome extension and Flask web app to analyze YouTube comments and display sentiment insights.
+\item Designed APIs for sentiment prediction, topic analysis, word clouds, keyword charts, and dashboard results.
+\item Implemented Redis-backed background jobs with polling, retries, job status tracking, and dead-letter handling.
+\item Created a TF-IDF based sentiment pipeline using text preprocessing, model inference, and result aggregation.
+\item Containerized the Flask API, Redis service, and worker process with Docker for reproducible deployment.
+}
+\end{itemize}
+```
+
+### Resume Architecture Diagram
+
+```mermaid
+flowchart TD
+  Resume["Resume Claims"] --> Frontend["Chrome extension + HTML/CSS/JS"]
+  Resume --> Backend["Flask APIs"]
+  Resume --> Async["Redis-backed jobs + worker"]
+  Resume --> ML["TF-IDF sentiment pipeline"]
+  Resume --> Deploy["Docker + Compose + Render"]
+
+  Frontend --> Popup["yt-chrome-plugin-frontend/popup.html + popup.js"]
+  Backend --> App["app.py"]
+  Async --> Worker["worker.py + RedisJobManager"]
+  ML --> Runtime["analytics_runtime.py + src/model"]
+  Deploy --> Docker["Dockerfile + docker-compose.yml + render.yaml"]
+```
+
+Line by line: every resume bullet maps to a concrete repo area. The Chrome extension is in `yt-chrome-plugin-frontend`. Flask APIs are in `app.py`. Redis jobs are split between `RedisJobManager` and `worker.py`. The TF-IDF pipeline is in `analytics_runtime.py` and `src/model`. Docker deployment is in `Dockerfile`, `docker-compose.yml`, and `render.yaml`.
+
+Interview Summary: If an interviewer asks about any resume line, start by naming the exact file that proves it, then explain the flow.
+
+### Bullet 1 Defense
+
+Resume line: `Built a Chrome extension and Flask web app to analyze YouTube comments and display sentiment insights.`
+
+```mermaid
+sequenceDiagram
+  participant User as User on YouTube
+  participant Popup as Chrome Extension Popup
+  participant Page as YouTube Page DOM
+  participant API as Flask API
+  participant Model as Sentiment Runtime
+  User->>Popup: Opens extension
+  Popup->>Page: Injects script with chrome.scripting
+  Page-->>Popup: Visible comments
+  Popup->>API: POST /predict_with_timestamps
+  API->>Model: preprocess + predict
+  Model-->>API: sentiment labels
+  API-->>Popup: predictions
+  Popup-->>User: counts, comments, charts, insights
+```
+
+Code evidence:
+
+```javascript
+// yt-chrome-plugin-frontend/popup.js
+document.addEventListener("DOMContentLoaded", init);
+
+async function init() {
+  setupSettingsForm();
+  await hydrateSavedApiBaseUrl();
+  await resolveApiBaseUrl();
+  const videoId = await getVideoId();
+  comments = sanitizeComments(await fetchComments());
+  predictions = normalizePredictions(await fetchPredictions(comments));
+  renderStats();
+  renderComments();
+  await loadCharts();
+  await loadWordCloud();
+  await loadKeywordChart();
+  await loadTopics();
+  await loadTopicSentiment();
+  await loadInsights();
+}
+```
+
+```python
+# app.py
+@app.route("/")
+def home() -> Response:
+    return Response(render_template_string(...), mimetype="text/html")
+
+@app.route("/predict_with_timestamps", methods=["POST"])
+def predict_with_timestamps() -> Response:
+    payload = parse_json_body()
+    comments = validate_comments(payload.get("comments"), config, require_timestamps=True)
+    texts = [comment["text"] for comment in comments]
+    predictions = ensure_runtime().predict_sentiments(texts)
+    return jsonify([...])
+```
+
+How to explain simply: "The extension is the main frontend. It runs on a YouTube video page, extracts visible comments, sends them to Flask, and renders sentiment counts plus analytics. The Flask homepage is a secondary web demo for the same backend."
+
+Likely interviewer questions:
+- Did you build a website or an extension? Ideal answer: both surfaces exist; the extension is the main user workflow, and Flask also serves an inline demo homepage.
+- How are YouTube comments collected? Ideal answer: the extension injects JavaScript into the active tab and reads visible comment DOM nodes after scrolling.
+- Is this using the YouTube Data API? Ideal answer: the app has a `/get_youtube_comments` endpoint, but the extension's primary flow scrapes visible comments from the page.
+- Where is the UI code? Ideal answer: `popup.html` for markup/CSS and `popup.js` for behavior.
+
+Common mistake: saying the app has a URL-paste workflow. It does not; the implemented extension flow uses the active YouTube tab.
+
+Interview Summary: This bullet is safe because the repo really contains a Chrome extension, a Flask web app, comment analysis, and rendered sentiment insights.
+
+### Bullet 2 Defense
+
+Resume line: `Designed APIs for sentiment prediction, topic analysis, word clouds, keyword charts, and dashboard results.`
+
+```mermaid
+flowchart TD
+  API["Flask APIs in app.py"] --> Predict["POST /predict_with_timestamps"]
+  API --> Topic["POST /extract_topics and /jobs/topics"]
+  API --> WordCloud["POST /generate_wordcloud and /jobs/wordcloud"]
+  API --> Keyword["POST /generate_keyword_chart and /jobs/keyword-chart"]
+  API --> Insights["POST /generate_insights and /jobs/insights"]
+  API --> Dashboard["GET / and GET /model-card"]
+```
+
+Code evidence:
+
+```python
+# app.py
+@app.route("/generate_wordcloud", methods=["POST"])
+def generate_wordcloud() -> Response:
+    payload = parse_json_body()
+    comments = validate_comments(payload.get("comments"), config)
+    image_bytes, content_type, _ = ensure_runtime().render_wordcloud(comments)
+    return send_file(io.BytesIO(image_bytes), mimetype=content_type)
+
+@app.route("/jobs/keyword-chart", methods=["POST"])
+def create_keyword_chart_job() -> Response:
+    payload = parse_json_body()
+    comments = validate_comments(payload.get("comments"), config)
+    return submit_artifact_job("keyword-chart", {"comments": comments})
+```
+
+```python
+# analytics_runtime.py
+def create_job_handlers(runtime: AnalyticsRuntime) -> dict[str, Any]:
+    return {
+        "insights": lambda payload: ({"insights": runtime.generate_local_insights(payload["comments"])}, None, None),
+        "topics": lambda payload: ({"topics": runtime.extract_topics(payload["comments"])}, None, None),
+        "wordcloud": lambda payload: runtime.render_wordcloud(payload["comments"]),
+        "keyword-chart": lambda payload: runtime.render_keyword_chart(payload["comments"]),
+    }
+```
+
+How to explain simply: "I exposed separate Flask endpoints for prediction and analytics. Prediction returns JSON immediately. Heavier analytics can run either synchronously or through `/jobs/*` endpoints that return a job ID."
+
+Likely interviewer questions:
+- Why separate endpoints? Ideal answer: prediction is lightweight and immediate; chart/topic generation can be heavier, so job endpoints keep the UI responsive.
+- What does the word cloud endpoint return? Ideal answer: PNG bytes with `image/png`.
+- What validates requests? Ideal answer: `parse_json_body`, `validate_comments`, `validate_sentiment_counts`, and `validate_sentiment_data`.
+- Is there OpenAPI documentation? Ideal answer: no formal OpenAPI spec exists; the route contracts are implemented and tested directly.
+
+Common mistake: claiming all dashboard charts are rendered in the browser. The chart images are generated by the backend.
+
+Interview Summary: This bullet is backed by concrete Flask routes and runtime analytics methods.
+
+### Bullet 3 Defense
+
+Resume line: `Implemented Redis-backed background jobs with polling, retries, job status tracking, and dead-letter handling.`
+
+```mermaid
+stateDiagram-v2
+  [*] --> Queued: Flask creates job
+  Queued --> Running: Worker consumes
+  Running --> Completed: Handler succeeds
+  Running --> Queued: Handler fails, attempts remain
+  Running --> Failed: Max attempts reached
+  Failed --> DeadLettered: Push to dead-letter queue
+  DeadLettered --> Queued: Admin replay
+```
+
+Code evidence:
+
+```python
+# app.py
+class RedisJobManager:
+    def submit(self, job_type: str, payload: dict[str, Any]) -> JobRecord:
+        job = JobRecord(...)
+        self._write_job(job)
+        message = json.dumps({"job_id": job.job_id, "job_type": job_type, "payload": payload})
+        self.client.rpush(self.queue_name, message)
+        return job
+```
+
+```python
+# worker.py
+item = client.blpop(queue_name, timeout=5)
+_, raw_message = item
+message = json.loads(raw_message)
+
+try:
+    result, content_type, artifact_filename = handlers[job_type](payload)
+    write_job(client, ttl_seconds, job_id, job_type, "completed", created_at, result=result, ...)
+except Exception as exc:
+    if attempts < max_job_attempts:
+        write_job(client, ttl_seconds, job_id, job_type, "queued", created_at, error=str(exc), ...)
+        client.rpush(queue_name, json.dumps(message))
+    else:
+        write_job(client, ttl_seconds, job_id, job_type, "failed", created_at, error=str(exc), dead_lettered=True)
+        client.rpush(dead_letter_queue_name, json.dumps(message))
+```
+
+```javascript
+// yt-chrome-plugin-frontend/popup.js
+async function waitForJob(jobPath, payload) {
+  const createRes = await fetch(`${apiBaseUrl}${jobPath}`, {...});
+  const job = await createRes.json();
+  while (Date.now() - startedAt < JOB_TIMEOUT_MS) {
+    const statusRes = await fetch(`${apiBaseUrl}${job.status_url}`);
+    const statusData = await statusRes.json();
+    if (statusData.status === "completed") return statusData;
+    if (statusData.status === "failed") throw new Error(statusData.error || "Background job failed");
+    await sleep(JOB_POLL_MS);
+  }
+  throw new Error("Background job timed out");
+}
+```
+
+How to explain simply: "Flask creates a job record and pushes work into a Redis list. The worker blocks on Redis, runs the analytics handler, stores the result, retries failures, and moves permanent failures to a dead-letter queue. The frontend polls the status URL."
+
+Likely interviewer questions:
+- Did you use Celery? Ideal answer: no. Celery is listed as a dependency, but the implemented queue is custom Redis lists plus `worker.py`.
+- What Redis commands are used? Ideal answer: `RPUSH` to enqueue, `BLPOP` to consume, `SETEX` for expiring job state, `LRANGE`/`LREM` for dead-letter management.
+- What happens if Redis is unavailable? Ideal answer: Flask falls back to `LocalJobManager` with `ThreadPoolExecutor`.
+- What is the weakness of this queue? Ideal answer: plain `BLPOP` can lose a popped job if the worker crashes mid-processing; production should use a mature task queue or reliable queue pattern.
+
+Common mistake: hiding queue limitations. A strong answer acknowledges them and proposes Celery/RQ/SQS as production alternatives.
+
+Interview Summary: This bullet is one of the strongest because Redis jobs, polling, retries, job state, and dead-letter replay are all implemented.
+
+### Bullet 4 Defense
+
+Resume line: `Created a TF-IDF based sentiment pipeline using text preprocessing, model inference, and result aggregation.`
+
+```mermaid
+flowchart TD
+  Raw["Raw comment"] --> Clean["Lowercase + regex cleanup"]
+  Clean --> Stop["Stopword removal"]
+  Stop --> Lemma["Optional lemmatization"]
+  Lemma --> TFIDF["TF-IDF vectorizer"]
+  TFIDF --> Model["Pickled classifier"]
+  Model --> Predict["Sentiment labels"]
+  Predict --> Aggregate["Counts, insights, topics"]
+  Aggregate --> UI["Dashboard rendering"]
+```
+
+Code evidence:
+
+```python
+# analytics_runtime.py
+@lru_cache(maxsize=8192)
+def _preprocess_comment_cached(self, text: str) -> str:
+    normalized = str(text).lower()
+    normalized = NEWLINE_RE.sub(" ", normalized)
+    normalized = NON_ALNUM_RE.sub("", normalized)
+    words = [word for word in normalized.split() if word not in self.stop_words]
+    if self.has_wordnet:
+        words = [self.lemmatizer.lemmatize(word) for word in words]
+    return " ".join(words)
+
+def predict_sentiments(self, texts: list[str]) -> list[int]:
+    processed = [self.preprocess_comment(text) for text in texts]
+    matrix = self.vectorizer.transform(processed)
+    predictions = self.model.predict(matrix)
+    return [int(prediction) for prediction in predictions]
+```
+
+```python
+# src/model/model_building.py
+def apply_tfidf(train_data: pd.DataFrame, max_features: int, ngram_range: tuple) -> tuple:
+    vectorizer = TfidfVectorizer(max_features=max_features, ngram_range=ngram_range)
+    features = vectorizer.fit_transform(train_data["clean_comment"].values)
+    labels = train_data["category"].values
+    pickle.dump(vectorizer, file)
+    return vectorizer, features, labels
+```
+
+How to explain simply: "The runtime preprocesses each comment, transforms it with the trained TF-IDF vectorizer, runs the saved classifier, and the UI aggregates predictions into counts and dashboards."
+
+Likely interviewer questions:
+- Why TF-IDF? Ideal answer: it is lightweight, explainable, fast for small text classification, and easy to deploy with scikit-learn.
+- Is it a deep learning model? Ideal answer: no. It is classic NLP with TF-IDF features and a selected classifier.
+- Where is training done? Ideal answer: `src/model/model_building.py`, controlled by `params.yaml` and DVC.
+- How good is the model? Ideal answer: current committed reports show prototype-grade quality with a tiny labeled dataset, so the architecture is stronger than the current model quality.
+
+Common mistake: overstating accuracy. Do not invent metrics.
+
+Interview Summary: The ML bullet is accurate if explained as classic TF-IDF inference, not transformer AI or production-grade model quality.
+
+### Bullet 5 Defense
+
+Resume line: `Containerized the Flask API, Redis service, and worker process with Docker for reproducible deployment.`
+
+```mermaid
+flowchart TD
+  Compose["docker-compose.yml"] --> Redis["redis:7-alpine"]
+  Compose --> Web["web: gunicorn app:app"]
+  Compose --> Worker["worker: python worker.py"]
+  Redis --> Web
+  Redis --> Worker
+  Dockerfile["Dockerfile"] --> Image["Python 3.11 slim image"]
+  Image --> Web
+  Image --> Worker
+```
+
+Code evidence:
+
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim-bookworm
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir --retries 10 --timeout 300 -r requirements.txt
+COPY . .
+EXPOSE 5000
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+```
+
+```yaml
+# docker-compose.yml
+services:
+  redis:
+    image: redis:7-alpine
+  web:
+    build: .
+    command: gunicorn --bind 0.0.0.0:5000 app:app
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+  worker:
+    build: .
+    command: python worker.py
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+```
+
+How to explain simply: "The same image runs both Flask and the worker. Docker Compose wires them with Redis, shared environment variables, health checks, and consistent dependencies."
+
+Likely interviewer questions:
+- Why Docker? Ideal answer: it packages Python dependencies, model artifacts, and runtime commands consistently across local and deployed environments.
+- Why Gunicorn? Ideal answer: Flask's dev server is not meant for production; Gunicorn is a WSGI server.
+- Is Redis inside the same container? Ideal answer: no. Redis is a separate service in Docker Compose.
+- How does Render deploy it? Ideal answer: `render.yaml` defines a Docker web service, a worker service, and a keyvalue/Redis service.
+
+Common mistake: saying Docker Compose is the same as production orchestration. It is a local multi-container setup and a useful production-like pattern.
+
+Interview Summary: The Docker bullet is accurate because the repo has a Dockerfile, Compose stack, and Render deployment config.
+
+### Exact Resume Q&A Table
+
+```mermaid
+flowchart LR
+  Interviewer["Interviewer asks from resume"] --> Claim["Identify resume claim"]
+  Claim --> File["Name exact file"]
+  File --> Flow["Explain request/data flow"]
+  Flow --> Limitation["State limitation honestly"]
+  Limitation --> Improvement["Offer production improvement"]
+```
+
+Use this response pattern:
+1. "That part is implemented in..."
+2. "The flow is..."
+3. "The main trade-off is..."
+4. "In production I would improve it by..."
+
+Questions and answers:
+
+1. What exactly did you build?
+   - Ideal answer: "I built a Chrome extension frontend and Flask backend that analyze visible YouTube comments, run sentiment inference, and display metrics, topics, word clouds, keyword charts, and insights."
+
+2. Which part is frontend?
+   - Ideal answer: "`popup.html` and `popup.js`; the UI is HTML/CSS/JavaScript inside a Chrome extension."
+
+3. Which part is backend?
+   - Ideal answer: "`app.py` provides Flask routes, validation, metrics, job managers, and the inline web demo."
+
+4. Where is Redis used?
+   - Ideal answer: "Redis stores transient job records and queues analytics work for `worker.py`."
+
+5. What are the background jobs?
+   - Ideal answer: "Insights, topics, topic sentiment, word cloud, keyword chart, and trend graph jobs."
+
+6. How does polling work?
+   - Ideal answer: "The frontend creates a job, receives `status_url`, then repeatedly calls it until the job is completed or failed."
+
+7. How do retries work?
+   - Ideal answer: "The worker increments attempts and requeues failed jobs until `MAX_JOB_ATTEMPTS`; then it dead-letters them."
+
+8. What is dead-letter handling?
+   - Ideal answer: "Permanent failures go to `analytics_jobs_dead_letter`, and admin endpoints can list and replay them in Redis mode."
+
+9. What is the ML model?
+   - Ideal answer: "A scikit-learn style TF-IDF vectorizer plus a selected classifier artifact saved as pickle."
+
+10. Why mention scikit-learn?
+    - Ideal answer: "The vectorizer and candidate models use scikit-learn APIs, and runtime inference calls `vectorizer.transform` and `model.predict`."
+
+11. Is LightGBM also used?
+    - Ideal answer: "Yes, LightGBM is one candidate and the committed model selection report selected `lightgbm`."
+
+12. Why not list LightGBM in tech line?
+    - Ideal answer: "You can list it if you want ML specificity; the current line stays simple with scikit-learn as the main interface."
+
+13. How are comments extracted?
+    - Ideal answer: "The extension injects a script into the active YouTube tab, scrolls, selects comment nodes, sanitizes text, and returns up to 100 comments."
+
+14. What does the Flask web app do?
+    - Ideal answer: "It serves a public demo homepage and the API endpoints used by the extension."
+
+15. Are there templates?
+    - Ideal answer: "No separate template files; the homepage is rendered with `render_template_string` inside `app.py`."
+
+16. Is Tailwind used?
+    - Ideal answer: "No. The resume does not claim Tailwind; styling is custom CSS."
+
+17. Is JavaScript actually used?
+    - Ideal answer: "Yes, `popup.js` drives the extension workflow and the homepage also has inline JavaScript."
+
+18. Does this use a database?
+    - Ideal answer: "No application database; Redis is transient job state, and files store reports/model artifacts."
+
+19. Does the live link use the full Redis worker stack?
+    - Ideal answer: "The repo supports both local executor and Redis worker mode. `/readyz` reports which backend is active in a deployment."
+
+20. What would you improve first?
+    - Ideal answer: "I would add auth/rate limiting, move artifacts to object storage, improve dataset size/label mapping, and replace custom queueing with Celery/RQ/SQS for production."
+
+Interview Summary: For every resume question, point to the file, explain the flow, mention the limitation, and then give a production improvement.
+
+### One-Minute Resume Walkthrough
+
+```mermaid
+flowchart TD
+  Intro["CommentPulse"] --> UI["Chrome extension UI"]
+  UI --> API["Flask APIs"]
+  API --> ML["TF-IDF sentiment inference"]
+  API --> Jobs["Redis background analytics"]
+  Jobs --> Docker["Docker deployment"]
+```
+
+Use this answer:
+
+"CommentPulse is a YouTube comment sentiment platform. I built a Chrome extension with HTML, CSS, and JavaScript that runs on an active YouTube video, extracts visible comments, and calls a Flask backend. The backend exposes APIs for sentiment prediction, topics, word clouds, keyword charts, insights, and dashboard data. Core sentiment prediction uses a TF-IDF based pipeline with text preprocessing and model inference. Heavier analytics run as background jobs using Redis and a worker process, with polling, retries, job status tracking, and dead-letter handling. I also containerized the Flask API, Redis, and worker with Docker so the stack can run consistently locally and in deployment."
+
+Common follow-up after this answer: "What was the hardest part?" Best answer: "Coordinating asynchronous analytics with a simple frontend UX: the popup needs quick sentiment results first, then it polls for heavier analytics without freezing the user flow."
+
+Interview Summary: This one-minute version covers every resume bullet without adding unprepared claims.
+
+### Code Snippets To Memorize Lightly
+
+```mermaid
+flowchart TD
+  Snippets["Know these snippets"] --> Frontend["waitForJob in popup.js"]
+  Snippets --> API["predict_with_timestamps in app.py"]
+  Snippets --> Redis["RedisJobManager.submit in app.py"]
+  Snippets --> Worker["retry/dead-letter in worker.py"]
+  Snippets --> ML["predict_sentiments in analytics_runtime.py"]
+  Snippets --> Docker["docker-compose services"]
+```
+
+Do not memorize full code. Memorize what each snippet proves:
+- `waitForJob`: proves frontend polling.
+- `predict_with_timestamps`: proves Flask prediction API.
+- `RedisJobManager.submit`: proves Redis job creation.
+- `worker.py` retry block: proves retries and dead-letter handling.
+- `predict_sentiments`: proves TF-IDF inference.
+- `docker-compose.yml`: proves API, Redis, and worker containers.
+
+Interview Summary: You do not need to recite code; you need to connect resume claims to implementation files confidently.
+
+### What Not To Say In Interviews
+
+```mermaid
+flowchart TD
+  Avoid["Avoid these claims"] --> Tailwind["Do not say Tailwind is used"]
+  Avoid --> Celery["Do not say Celery is implemented"]
+  Avoid --> Auth["Do not say auth exists"]
+  Avoid --> DB["Do not say there is a product database"]
+  Avoid --> Pagination["Do not say YouTube API pagination is implemented"]
+  Avoid --> Accuracy["Do not invent ML accuracy"]
+```
+
+Safer wording:
+- Instead of "Celery queue", say "custom Redis-backed queue and worker."
+- Instead of "database", say "Redis transient job state and file-based model/report artifacts."
+- Instead of "YouTube API pagination", say "extension collects visible page comments; the backend has a first-page YouTube API endpoint."
+- Instead of "production-ready model", say "prototype-grade classic ML pipeline with a clear path to improve data and evaluation."
+
+Interview Summary: Your resume is strong because it is specific. Keep your answers specific and truthful.
