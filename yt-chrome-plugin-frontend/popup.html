@@ -243,7 +243,7 @@
       <div class="title">Comment Insights</div>
       <div class="summary">Live YouTube sentiment and audience signals.</div>
     </div>
-    <div class="badge">Local AI</div>
+    <div class="badge">Hosted model</div>
   </div>
 
   <div class="card">
@@ -253,12 +253,12 @@
         id="apiBaseUrlInput"
         class="settings-input"
         type="text"
-        placeholder="https://your-tunnel.trycloudflare.com"
+        placeholder="Leave blank to use the hosted service"
       />
       <button id="saveApiBaseUrlButton" class="settings-button" type="button">Save</button>
     </div>
     <div id="apiBaseUrlHelp" class="settings-help">
-      Saved backend URL. Leave blank to auto-detect from the built-in defaults.
+      Leave blank to use the hosted CommentPulse service. Set a URL only if you run your own API.
     </div>
   </div>
 
@@ -348,6 +348,8 @@
 
 </div>
   <div id="loading" class="loading">Analyzing comments...</div>
+  <button id="retryAnalysisButton" class="settings-button" type="button" hidden>Retry analysis</button>
+  <button id="retryAnalyticsButton" class="settings-button" type="button" hidden>Retry insights</button>
 
   <script src="popup.js"></script>
 

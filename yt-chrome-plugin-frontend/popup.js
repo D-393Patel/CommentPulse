@@ -1,24 +1,31 @@
-console.log("Comment Insights popup.js v1.0.1 loaded");
+console.log("Comment Insights popup.js v1.0.4 loaded");
 document.addEventListener("DOMContentLoaded", init);
 
 const API_CANDIDATES = [
-  "https://featured-circles-advertiser-gig.trycloudflare.com",
+  "https://commentpulse-api.onrender.com",
   "http://127.0.0.1:5000",
   "http://localhost:5000",
 ];
-const JOB_POLL_MS = 600;
-const JOB_TIMEOUT_MS = 30000;
+const JOB_POLL_MS = 1000;
+const JOB_TIMEOUT_MS = 120000;
+const READY_TIMEOUT_MS = 90000;
+const REQUEST_TIMEOUT_MS = 20000;
 const MAX_COMMENT_LENGTH = 1000;
 const STORAGE_KEY_API_BASE_URL = "apiBaseUrl";
 
 let comments = [];
 let predictions = [];
 let apiBaseUrl = API_CANDIDATES[0];
+let analyticsBusy = false;
+let settingsFormBound = false;
 
 async function init() {
+  document.getElementById("retryAnalysisButton").hidden = true;
+  setRetryVisible(false);
   try {
     setupSettingsForm();
     await hydrateSavedApiBaseUrl();
+    setLoadingMessage("Connecting to CommentPulse. The free server may need up to a minute to wake up...");
     await resolveApiBaseUrl();
     syncApiInput();
 
@@ -48,18 +55,12 @@ async function init() {
     renderStats();
     renderComments();
 
-    setLoadingMessage("Loading analytics...");
-    await loadCharts();
-    await loadWordCloud();
-    await loadKeywordChart();
-    await loadTopics();
-    await loadTopicSentiment();
-    await loadInsights();
-
-    document.getElementById("loading").style.display = "none";
+    await loadAnalytics();
+    document.getElementById("retryAnalysisButton").hidden = true;
   } catch (err) {
     console.error("Popup init error:", err);
     setLoadingMessage(err?.message || "Failed to load insights");
+    document.getElementById("retryAnalysisButton").hidden = false;
   }
 }
 
@@ -76,7 +77,55 @@ function setMutedMessage(elementId, message) {
     return;
   }
 
-  element.innerHTML = `<div class="muted">${message}</div>`;
+  const notice = document.createElement("div");
+  notice.className = "muted";
+  notice.textContent = message;
+  element.replaceChildren(notice);
+}
+
+function setImageMessage(elementId, message) {
+  const image = document.getElementById(elementId);
+  if (!image) return;
+  let status = document.getElementById(`${elementId}Status`);
+  if (!status) {
+    status = document.createElement("div");
+    status.id = `${elementId}Status`;
+    status.className = "muted";
+    status.setAttribute("role", "status");
+    image.insertAdjacentElement("afterend", status);
+  }
+  status.textContent = message;
+  status.hidden = !message;
+  image.alt = message;
+  if (message) image.removeAttribute("src");
+}
+
+function setRetryVisible(visible) {
+  const button = document.getElementById("retryAnalyticsButton");
+  if (button) button.hidden = !visible;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("The server took too long to respond. Please retry in a moment.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function readJsonResponse(response, fallbackMessage) {
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(fallbackMessage);
+  }
 }
 
 function setSettingsHelp(message, isError = false) {
@@ -99,15 +148,16 @@ function normalizeApiUrl(url) {
 }
 
 function normalizePredictions(data) {
-  if (Array.isArray(data)) {
-    return data;
-  }
+  const rows = Array.isArray(data) ? data : data?.predictions;
+  if (!Array.isArray(rows)) return [];
 
-  if (Array.isArray(data?.predictions)) {
-    return data.predictions;
-  }
-
-  return [];
+  return rows.map((row, index) => {
+    const sentiment = Number(row?.sentiment);
+    if (!Number.isInteger(sentiment) || ![-1, 0, 1].includes(sentiment)) {
+      throw new Error(`The analysis service returned an invalid sentiment for comment ${index + 1}. Please retry.`);
+    }
+    return { ...row, sentiment };
+  });
 }
 
 function getPredictionList() {
@@ -169,12 +219,14 @@ async function hydrateSavedApiBaseUrl() {
 }
 
 function setupSettingsForm() {
+  if (settingsFormBound) return;
   const button = document.getElementById("saveApiBaseUrlButton");
   const input = document.getElementById("apiBaseUrlInput");
 
   if (!button || !input) {
     return;
   }
+  settingsFormBound = true;
 
   button.addEventListener("click", async () => {
     const candidateUrl = normalizeApiUrl(input.value);
@@ -195,7 +247,7 @@ function setupSettingsForm() {
     }
 
     try {
-      const response = await fetch(`${candidateUrl}/readyz`);
+      const response = await fetchWithTimeout(`${candidateUrl}/readyz`, {}, READY_TIMEOUT_MS);
 
       if (!response.ok) {
         throw new Error("Ready check failed");
@@ -222,7 +274,7 @@ async function resolveApiBaseUrl() {
 
   for (const candidate of candidates) {
     try {
-      const response = await fetch(`${candidate}/readyz`);
+      const response = await fetchWithTimeout(`${candidate}/readyz`, {}, READY_TIMEOUT_MS);
 
       if (response.ok) {
         apiBaseUrl = candidate;
@@ -241,25 +293,31 @@ async function sleep(ms) {
 }
 
 async function waitForJob(jobPath, payload) {
-  const createRes = await fetch(`${apiBaseUrl}${jobPath}`, {
+  const createRes = await fetchWithTimeout(`${apiBaseUrl}${jobPath}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
-  });
+  }, READY_TIMEOUT_MS);
 
-  const job = await createRes.json();
+  const job = await readJsonResponse(createRes, "The server returned an unreadable response. Please retry.");
 
   if (!createRes.ok) {
     throw new Error(job?.error?.message || "Failed to create job");
+  }
+  if (typeof job.status_url !== "string" || !job.status_url.startsWith("/jobs/")) {
+    throw new Error("The server returned an invalid job status link.");
   }
 
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < JOB_TIMEOUT_MS) {
-    const statusRes = await fetch(`${apiBaseUrl}${job.status_url}`);
-    const statusData = await statusRes.json();
+    const statusRes = await fetchWithTimeout(`${apiBaseUrl}${job.status_url}`);
+    const statusData = await readJsonResponse(statusRes, "Could not read the analysis status. Please retry.");
+    if (!statusRes.ok) {
+      throw new Error(statusData?.error?.message || "Could not check the analysis status.");
+    }
 
     if (statusData.status === "completed") {
       return statusData;
@@ -296,7 +354,7 @@ async function fetchComments() {
     return await extractCommentsFromPage();
   } catch (err) {
     console.error("Comment fetch error:", err);
-    return [];
+    throw new Error("Could not read comments from this YouTube tab. Reload the video and try again.");
   }
 }
 
@@ -365,15 +423,15 @@ async function extractCommentsFromPage() {
 }
 
 async function fetchPredictions(commentItems) {
-  const response = await fetch(`${apiBaseUrl}/predict_with_timestamps`, {
+  const response = await fetchWithTimeout(`${apiBaseUrl}/predict_with_timestamps`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ comments: sanitizeComments(commentItems) }),
-  });
+  }, READY_TIMEOUT_MS);
 
-  const data = await response.json();
+  const data = await readJsonResponse(response, "The server returned an unreadable analysis response.");
 
   if (!response.ok) {
     throw new Error(data?.error?.message || "Prediction request failed");
@@ -395,24 +453,22 @@ function renderStats() {
     return;
   }
 
-  let pos = 0;
-  let neu = 0;
-  let neg = 0;
+  const counts = { positive: 0, neutral: 0, negative: 0 };
 
   predictionList.forEach((prediction) => {
     if (prediction.sentiment === 1) {
-      pos += 1;
+      counts.positive += 1;
     } else if (prediction.sentiment === 0) {
-      neu += 1;
-    } else if (prediction.sentiment === -1) {
-      neg += 1;
+      counts.neutral += 1;
+    } else {
+      counts.negative += 1;
     }
   });
 
-  document.getElementById("positiveCount").innerText = pos;
-  document.getElementById("neutralCount").innerText = neu;
-  document.getElementById("negativeCount").innerText = neg;
-  document.getElementById("totalCount").innerText = predictionList.length;
+  document.getElementById("positiveCount").innerText = counts.positive;
+  document.getElementById("neutralCount").innerText = counts.neutral;
+  document.getElementById("negativeCount").innerText = counts.negative;
+  document.getElementById("totalCount").innerText = Object.values(counts).reduce((sum, count) => sum + count, 0);
 }
 
 function renderComments() {
@@ -423,7 +479,7 @@ function renderComments() {
   }
 
   const list = document.getElementById("commentList");
-  list.innerHTML = "";
+  list.replaceChildren();
 
   predictionList.slice(0, 10).forEach((comment) => {
     const li = document.createElement("li");
@@ -443,12 +499,13 @@ function renderComments() {
     const commentText = typeof comment.comment === "string" ? comment.comment : "";
     const truncatedComment = commentText.length > 120 ? `${commentText.slice(0, 120)}...` : commentText;
 
-    li.innerHTML = `
-      ${truncatedComment}
-      <div class="sentiment ${sentimentClass}">
-        ${sentimentText}
-      </div>
-    `;
+    const text = document.createElement("div");
+    text.className = "comment-text";
+    text.textContent = truncatedComment;
+    const sentimentLabel = document.createElement("div");
+    sentimentLabel.className = `sentiment ${sentimentClass}`;
+    sentimentLabel.textContent = sentimentText;
+    li.append(text, sentimentLabel);
 
     list.appendChild(li);
   });
@@ -456,11 +513,11 @@ function renderComments() {
 
 function formatTopicLabel(topic) {
   if (topic.title) {
-    return topic.title;
+    return String(topic.title);
   }
 
   if (Array.isArray(topic.keywords) && topic.keywords.length > 0) {
-    return topic.keywords.slice(0, 3).join(", ");
+    return topic.keywords.slice(0, 3).map(String).join(", ");
   }
 
   return `Topic ${topic.topic ?? ""}`.trim();
@@ -483,7 +540,7 @@ async function loadCharts() {
   });
 
   try {
-    const response = await fetch(`${apiBaseUrl}/generate_chart`, {
+    const response = await fetchWithTimeout(`${apiBaseUrl}/generate_chart`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sentiment_counts: counts }),
@@ -494,9 +551,15 @@ async function loadCharts() {
     }
 
     const blob = await response.blob();
-    document.getElementById("sentimentChart").src = URL.createObjectURL(blob);
+    const chart = document.getElementById("sentimentChart");
+    if (chart.src.startsWith("blob:")) URL.revokeObjectURL(chart.src);
+    chart.src = URL.createObjectURL(blob);
+    setImageMessage("sentimentChart", "");
+    return true;
   } catch (err) {
     console.error("Chart error:", err);
+    setImageMessage("sentimentChart", "Sentiment chart unavailable. Use Retry failed insights to try again.");
+    return false;
   }
 }
 
@@ -507,11 +570,11 @@ async function loadTopics() {
     });
 
     const list = document.getElementById("topicList");
-    list.innerHTML = "";
+    list.replaceChildren();
 
     if (!data.result?.topics || data.result.topics.length === 0) {
       setMutedMessage("topicList", "No discussion topics found yet.");
-      return;
+      return true;
     }
 
     data.result.topics.forEach((topic) => {
@@ -520,9 +583,11 @@ async function loadTopics() {
       li.innerText = formatTopicLabel(topic);
       list.appendChild(li);
     });
+    return true;
   } catch (err) {
     console.error("Topic error:", err);
-    setMutedMessage("topicList", "Failed to load discussion topics.");
+    setMutedMessage("topicList", "Topics unavailable. Use Retry failed insights to try again.");
+    return false;
   }
 }
 
@@ -532,11 +597,13 @@ async function loadInsights() {
       comments: comments.map((comment) => comment.text),
     });
 
-    document.getElementById("aiInsights").innerText =
+    document.getElementById("aiInsights").textContent =
       data.result?.insights?.summary || "No insights generated.";
+    return true;
   } catch (err) {
     console.error("Insights error:", err);
-    document.getElementById("aiInsights").innerText = "Failed to generate insights.";
+    document.getElementById("aiInsights").textContent = "Summary unavailable. Use Retry failed insights to try again.";
+    return false;
   }
 }
 
@@ -546,9 +613,13 @@ async function loadWordCloud() {
       comments: comments.map((comment) => comment.text),
     });
 
-    document.getElementById("wordCloud").src = `${apiBaseUrl}${data.artifact_url}`;
+    document.getElementById("wordCloud").src = getApiArtifactUrl(data.artifact_url);
+    setImageMessage("wordCloud", "");
+    return true;
   } catch (err) {
     console.error("WordCloud error:", err);
+    setImageMessage("wordCloud", "Word cloud unavailable. Use Retry failed insights to try again.");
+    return false;
   }
 }
 
@@ -558,9 +629,13 @@ async function loadKeywordChart() {
       comments: comments.map((comment) => comment.text),
     });
 
-    document.getElementById("keywordChart").src = `${apiBaseUrl}${data.artifact_url}`;
+    document.getElementById("keywordChart").src = getApiArtifactUrl(data.artifact_url);
+    setImageMessage("keywordChart", "");
+    return true;
   } catch (err) {
     console.error("Keyword chart error:", err);
+    setImageMessage("keywordChart", "Keyword chart unavailable. Use Retry failed insights to try again.");
+    return false;
   }
 }
 
@@ -571,26 +646,71 @@ async function loadTopicSentiment() {
     });
 
     const list = document.getElementById("topicSentimentList");
-    list.innerHTML = "";
+    list.replaceChildren();
 
     if (!data.result?.topics || data.result.topics.length === 0) {
       setMutedMessage("topicSentimentList", "No topic sentiment breakdown available yet.");
-      return;
+      return true;
     }
 
     data.result.topics.forEach((topic) => {
       const li = document.createElement("li");
       li.className = "topic-sentiment-item";
-      li.innerHTML = `
-        <strong>${topic.topic}</strong> - ${topic.dominant_sentiment}
-        <div class="topic-sentiment-meta">
-          Positive ${topic.positive} - Neutral ${topic.neutral} - Negative ${topic.negative}
-        </div>
-      `;
+      const label = document.createElement("strong");
+      label.textContent = `${String(topic.topic ?? "Topic")} - ${String(topic.dominant_sentiment ?? "Unknown")}`;
+      const meta = document.createElement("div");
+      meta.className = "topic-sentiment-meta";
+      meta.textContent = `Positive ${Number(topic.positive) || 0} - Neutral ${Number(topic.neutral) || 0} - Negative ${Number(topic.negative) || 0}`;
+      li.append(label, meta);
       list.appendChild(li);
     });
+    return true;
   } catch (err) {
     console.error("Topic sentiment error:", err);
-    setMutedMessage("topicSentimentList", "Failed to load topic sentiment breakdown.");
+    setMutedMessage("topicSentimentList", "Topic sentiment unavailable. Use Retry failed insights to try again.");
+    return false;
   }
 }
+
+function getApiArtifactUrl(path) {
+  if (typeof path !== "string" || !path.startsWith("/jobs/")) {
+    throw new Error("The server returned an invalid chart link.");
+  }
+  const base = new URL(apiBaseUrl);
+  const artifact = new URL(path, base);
+  if (artifact.origin !== base.origin) {
+    throw new Error("The server returned an invalid chart link.");
+  }
+  return artifact.href;
+}
+
+async function loadAnalytics() {
+  if (analyticsBusy || comments.length === 0) return;
+  analyticsBusy = true;
+  setRetryVisible(false);
+  setLoadingMessage("Generating charts and insights. This can take a little while on the free server...");
+
+  try {
+    const results = await Promise.all([
+      loadCharts(),
+      loadWordCloud(),
+      loadKeywordChart(),
+      loadTopics(),
+      loadTopicSentiment(),
+      loadInsights(),
+    ]);
+    const hasFailures = results.some((success) => !success);
+    document.getElementById("loading").style.display = hasFailures ? "block" : "none";
+    if (hasFailures) {
+      setLoadingMessage("Some insights could not load. Retry the failed insights below.");
+      setRetryVisible(true);
+    }
+  } finally {
+    analyticsBusy = false;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("retryAnalyticsButton")?.addEventListener("click", loadAnalytics);
+  document.getElementById("retryAnalysisButton")?.addEventListener("click", init);
+});

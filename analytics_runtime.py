@@ -27,6 +27,37 @@ warnings.filterwarnings(
 
 NEWLINE_RE = re.compile(r"\n")
 NON_ALNUM_RE = re.compile(r"[^a-z0-9 ]")
+NUMBER_RE = re.compile(r"\b\d+\b")
+POSITIVE_CUE_RE = re.compile(
+    r"\b(?:not\s+(?:bad|terrible|awful)|thank\s+you|thanks|thx|dhanyavaad|shukriya|awesome|amazing|excellent|"
+    r"fantastic|wonderful|brilliant|helpful|well\s+explained|clear\s+explanation|"
+    r"great|good|nice|love|loved|best|superb|zabardast|accha|achha|acha|"
+    r"bahut\s+(?:accha|achha|acha)|bohot\s+(?:accha|achha|acha))\b",
+    re.IGNORECASE,
+)
+NEGATIVE_CUE_RE = re.compile(
+    r"\b(?:not\s+(?:good|great|helpful|clear|useful|working)|don['’]?t\s+like|"
+    r"didn['’]?t\s+like|doesn['’]?t\s+work|isn['’]?t\s+working|"
+    r"waste(?:d)?|useless|awful|terrible|horrible|worst|boring|confusing|"
+    r"incorrect|wrong|poor|bad|hate|bekar|bakwas|ghatiya|samajh\s+nahi\s+aaya)\b",
+    re.IGNORECASE,
+)
+POSITIVE_NEGATION_RE = re.compile(
+    r"\b(?:not|never|no|don['’]?t|didn['’]?t|doesn['’]?t|isn['’]?t|wasn['’]?t)"
+    r"(?:\s+\w+){0,2}\s+(?:awesome|amazing|excellent|fantastic|wonderful|"
+    r"brilliant|helpful|great|good|nice|love|loved|best|superb|accha|achha|acha)\b",
+    re.IGNORECASE,
+)
+NEGATIVE_NEGATION_RE = re.compile(
+    r"\b(?:not|never|no|isn['’]?t|wasn['’]?t|aren['’]?t)"
+    r"(?:\s+\w+){0,2}\s+(?:bad|boring|wrong|poor|useless|awful|terrible|horrible)\b",
+    re.IGNORECASE,
+)
+TOPIC_STOP_WORDS = {
+    "sir", "madam", "thanks", "thank", "thankyou", "thx", "please", "video",
+    "lecture", "subscribe", "like", "comment", "awesome", "amazing", "great",
+    "good", "nice", "best", "sirji", "bro", "brother", "dear", "test",
+}
 
 
 def _load_pandas():
@@ -82,10 +113,10 @@ def load_stop_words(logger: logging.Logger) -> set[str]:
     try:
         nltk_find("corpora/stopwords")
         words = set(stopwords.words("english"))
-        return words - {"not", "no", "but"}
+        return (words - {"not", "no", "but"}) | TOPIC_STOP_WORDS
     except LookupError:
         logger.warning("NLTK stopwords corpus not available, using fallback stopword set.")
-        return fallback_words
+        return fallback_words | TOPIC_STOP_WORDS
 
 
 def wordnet_available() -> bool:
@@ -109,11 +140,30 @@ class AnalyticsRuntime:
             self.model = pickle.load(model_file)
         with vectorizer_path.open("rb") as vectorizer_file:
             self.vectorizer = pickle.load(vectorizer_file)
+        self.sentiment_label_map = self._build_sentiment_label_map()
+
+    def _build_sentiment_label_map(self) -> dict[int, int]:
+        """Translate training labels to the public API contract (-1/0/1)."""
+        classes = getattr(self.model, "classes_", None)
+        try:
+            class_values = {int(value) for value in classes} if classes is not None else set()
+        except (TypeError, ValueError):
+            class_values = set()
+
+        if -1 in class_values:
+            return {-1: -1, 0: 0, 1: 1}
+        if class_values and class_values.issubset({0, 1, 2}):
+            # params.yaml maps negative/neutral/positive to 0/1/2.
+            return {0: -1, 1: 0, 2: 1}
+        raise ValueError(
+            f"Unsupported sentiment model classes {sorted(class_values)}; expected -1/0/1 or 0/1/2."
+        )
 
     @lru_cache(maxsize=8192)
     def _preprocess_comment_cached(self, text: str) -> str:
         normalized = str(text).lower()
         normalized = NEWLINE_RE.sub(" ", normalized)
+        normalized = NUMBER_RE.sub(" ", normalized)
         normalized = NON_ALNUM_RE.sub("", normalized)
         words = [word for word in normalized.split() if word not in self.stop_words]
         if self.has_wordnet:
@@ -128,7 +178,7 @@ class AnalyticsRuntime:
         processed = [comment for comment in processed if comment]
         if not processed:
             return []
-        tfidf = TfidfVectorizer(stop_words="english", max_features=50, ngram_range=(1, 2))
+        tfidf = TfidfVectorizer(stop_words=sorted(self.stop_words), max_features=50, ngram_range=(1, 2))
         matrix = tfidf.fit_transform(processed)
         scores = matrix.sum(axis=0).A1
         terms = tfidf.get_feature_names_out()
@@ -147,21 +197,50 @@ class AnalyticsRuntime:
                 columns=self.vectorizer.get_feature_names_out(),
             )
             predictions = self.model.predict(feature_frame)
-        return [int(prediction) for prediction in predictions]
+        mapped = [self.sentiment_label_map[int(prediction)] for prediction in predictions]
+        try:
+            has_model_features = [matrix.getrow(index).nnz > 0 for index in range(len(texts))]
+        except AttributeError:
+            has_model_features = [True] * len(texts)
+        return [
+            self._apply_clear_sentiment_cue(text, sentiment, has_features)
+            for text, sentiment, has_features in zip(texts, mapped, has_model_features)
+        ]
+
+    @staticmethod
+    def _apply_clear_sentiment_cue(
+        text: str,
+        model_sentiment: int,
+        has_model_features: bool = True,
+    ) -> int:
+        """Correct obvious short praise/complaints the general-purpose model misses."""
+        normalized = str(text).strip()
+        positive = bool(POSITIVE_CUE_RE.search(normalized)) and not bool(
+            POSITIVE_NEGATION_RE.search(normalized)
+        )
+        negative = bool(NEGATIVE_CUE_RE.search(normalized)) and not bool(
+            NEGATIVE_NEGATION_RE.search(normalized)
+        )
+        if positive != negative:
+            return 1 if positive else -1
+        if not has_model_features:
+            return 0
+        return model_sentiment
 
     def extract_topics(self, comments: list[str]) -> list[dict[str, Any]]:
         processed = [self.preprocess_comment(comment) for comment in comments if comment.strip()]
+        processed = [comment for comment in processed if comment]
         if not processed:
             return []
-        tfidf = TfidfVectorizer(stop_words="english", max_features=50, ngram_range=(1, 2))
+        tfidf = TfidfVectorizer(stop_words=sorted(self.stop_words), max_features=50, ngram_range=(1, 2))
         matrix = tfidf.fit_transform(processed)
-        cluster_count = min(3, len(processed))
+        cluster_count = min(3, len(set(processed)))
         kmeans = KMeans(n_clusters=cluster_count, random_state=42, n_init=10)
         kmeans.fit(matrix)
         terms = tfidf.get_feature_names_out()
         topics = []
         for index, center in enumerate(kmeans.cluster_centers_):
-            keywords = [terms[i] for i in center.argsort()[-5:]]
+            keywords = [terms[i] for i in center.argsort()[-5:][::-1]]
             topics.append(
                 {
                     "topic": index + 1,
@@ -189,7 +268,7 @@ class AnalyticsRuntime:
         positive_themes = self.top_terms_from_comments(positive_comments, limit=3)
         negative_themes = self.top_terms_from_comments(negative_comments, limit=3)
 
-        dominant_sentiment = max(counts, key=counts.get)
+        dominant_sentiment = max(("neutral", "positive", "negative"), key=counts.get)
         summary_lines = [
             f"Analyzed {total} comments.",
             (
@@ -208,8 +287,10 @@ class AnalyticsRuntime:
         recommendations = []
         if counts["negative"] > counts["positive"]:
             recommendations.append("Address the top negative themes directly in the next video or pinned comment.")
-        else:
+        elif counts["positive"] > 0:
             recommendations.append("Double down on the topics driving the strongest positive reactions.")
+        else:
+            recommendations.append("Review a sample of comments manually; the model found no clear positive reactions.")
         if negative_themes:
             recommendations.append(
                 "Investigate whether these recurring negative topics are tied to content clarity, pacing, or audience expectation gaps."
@@ -230,6 +311,9 @@ class AnalyticsRuntime:
 
     def render_pie_chart(self, counts: dict[str, int]) -> tuple[bytes, str | None, str | None]:
         plt, _ = _load_matplotlib()
+        total = sum(counts.values())
+        if total <= 0:
+            return self._render_empty_chart("No sentiment results yet.", (5, 5))
         plt.figure(figsize=(5, 5))
         plt.pie(
             [counts["1"], counts["0"], counts["-1"]],
@@ -245,6 +329,8 @@ class AnalyticsRuntime:
     def render_wordcloud(self, comments: list[str]) -> tuple[bytes, str | None, str | None]:
         WordCloud = _load_wordcloud()
         text = " ".join(self.preprocess_comment(comment) for comment in comments)
+        if not text.strip():
+            return self._render_empty_chart("No recurring keywords found.", (8, 4))
         wordcloud = WordCloud(width=800, height=400).generate(text)
         image = io.BytesIO()
         wordcloud.to_image().save(image, format="PNG")
@@ -254,7 +340,10 @@ class AnalyticsRuntime:
     def render_keyword_chart(self, comments: list[str]) -> tuple[bytes, str | None, str | None]:
         plt, _ = _load_matplotlib()
         processed = [self.preprocess_comment(comment) for comment in comments]
-        tfidf = TfidfVectorizer(stop_words="english", max_features=10)
+        processed = [comment for comment in processed if comment]
+        if not processed:
+            return self._render_empty_chart("No recurring keywords found.", (8, 4))
+        tfidf = TfidfVectorizer(stop_words=sorted(self.stop_words), max_features=10)
         matrix = tfidf.fit_transform(processed)
         scores = matrix.sum(axis=0).A1
         words = tfidf.get_feature_names_out()
@@ -308,20 +397,25 @@ class AnalyticsRuntime:
     def compute_topic_sentiment(self, comments: list[dict[str, str]]) -> dict[str, Any]:
         texts = [comment["text"] for comment in comments]
         processed = [self.preprocess_comment(text) for text in texts]
-        tfidf = TfidfVectorizer(stop_words="english", max_features=100)
-        matrix = tfidf.fit_transform(processed)
-        cluster_count = min(3, len(processed))
+        active_indices = [index for index, text in enumerate(processed) if text]
+        if not active_indices:
+            return {"topics": []}
+        active_texts = [processed[index] for index in active_indices]
+        tfidf = TfidfVectorizer(stop_words=sorted(self.stop_words), max_features=100)
+        matrix = tfidf.fit_transform(active_texts)
+        cluster_count = min(3, len(set(active_texts)))
         clusters = KMeans(n_clusters=cluster_count, random_state=42, n_init=10).fit_predict(matrix)
         terms = tfidf.get_feature_names_out()
         topics: list[dict[str, Any]] = []
         predictions = self.predict_sentiments(texts)
         for cluster_index in range(cluster_count):
-            indices = [index for index, cluster in enumerate(clusters) if cluster == cluster_index]
-            if not indices:
+            local_indices = [index for index, cluster in enumerate(clusters) if cluster == cluster_index]
+            if not local_indices:
                 continue
+            indices = [active_indices[index] for index in local_indices]
             cluster_matrix = tfidf.transform([processed[index] for index in indices])
             mean_scores = cluster_matrix.mean(axis=0).A1
-            keywords = [terms[index] for index in mean_scores.argsort()[-3:]]
+            keywords = [terms[index] for index in mean_scores.argsort()[-3:][::-1]]
             sentiments = [predictions[index] for index in indices]
             positive = sentiments.count(1)
             neutral = sentiments.count(0)
@@ -342,6 +436,18 @@ class AnalyticsRuntime:
                 }
             )
         return {"topics": topics}
+
+    @staticmethod
+    def _render_empty_chart(message: str, figsize: tuple[int, int]) -> tuple[bytes, str, str]:
+        plt, _ = _load_matplotlib()
+        figure, axis = plt.subplots(figsize=figsize)
+        axis.axis("off")
+        axis.text(0.5, 0.5, message, ha="center", va="center", wrap=True)
+        image = io.BytesIO()
+        figure.savefig(image, format="png", bbox_inches="tight")
+        image.seek(0)
+        plt.close(figure)
+        return image.getvalue(), "image/png", "empty-chart.png"
 
 
 def create_job_handlers(runtime: AnalyticsRuntime) -> dict[str, Any]:
