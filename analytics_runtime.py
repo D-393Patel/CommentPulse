@@ -30,7 +30,7 @@ NON_ALNUM_RE = re.compile(r"[^a-z0-9 ]")
 NUMBER_RE = re.compile(r"\b\d+\b")
 POSITIVE_CUE_RE = re.compile(
     r"\b(?:not\s+(?:bad|terrible|awful)|thank\s+you|thanks|thx|dhanyavaad|shukriya|awesome|amazing|excellent|"
-    r"fantastic|wonderful|brilliant|helpful|well\s+explained|clear\s+explanation|"
+    r"fantastic|wonderful|brilliant|helpful|useful|informative|understandable|clear|explained|well\s+explained|clear\s+explanation|"
     r"great|good|nice|love|loved|best|superb|zabardast|accha|achha|acha|"
     r"bahut\s+(?:accha|achha|acha)|bohot\s+(?:accha|achha|acha))\b",
     re.IGNORECASE,
@@ -189,6 +189,10 @@ class AnalyticsRuntime:
     ) -> int:
         """Correct obvious short praise/complaints the general-purpose model misses."""
         normalized = str(text).strip()
+        if POSITIVE_NEGATION_RE.search(normalized):
+            return -1
+        if NEGATIVE_NEGATION_RE.search(normalized):
+            return 1
         positive = bool(POSITIVE_CUE_RE.search(normalized)) and not bool(
             POSITIVE_NEGATION_RE.search(normalized)
         )

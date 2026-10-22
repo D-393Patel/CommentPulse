@@ -69,6 +69,16 @@ class SentimentRuntimeTestCase(unittest.TestCase):
         runtime = make_runtime([0, 1, 2], [0] * len(texts))
         self.assertEqual(runtime.predict_sentiments(texts), [1, 1, 1, -1, 1])
 
+    def test_short_positive_and_negated_positive_phrases_are_corrected(self):
+        texts = [
+            "The lecture was clear and useful",
+            "No good example was provided",
+            "This is not good",
+            "The explanation is not bad",
+        ]
+        runtime = make_runtime([0, 1, 2], [0] * len(texts))
+        self.assertEqual(runtime.predict_sentiments(texts), [1, -1, -1, 1])
+
     def test_out_of_vocabulary_text_defaults_to_neutral_unless_cue_is_clear(self):
         runtime = make_runtime([0, 1, 2], [0, 0], feature_counts=[0, 0])
         self.assertEqual(runtime.predict_sentiments(["foreign topic words", "Awesome!!!!"]), [0, 1])
