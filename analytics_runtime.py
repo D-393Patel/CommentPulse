@@ -12,7 +12,7 @@ from nltk.corpus import stopwords
 from nltk.data import find as nltk_find
 from nltk.stem import WordNetLemmatizer
 from sklearn.cluster import KMeans
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 os.environ.setdefault("LOKY_MAX_CPU_COUNT", str(os.cpu_count() or 1))
 warnings.filterwarnings(
     "ignore",
@@ -83,40 +83,14 @@ def _load_wordcloud():
 
 
 def load_stop_words(logger: logging.Logger) -> set[str]:
-    fallback_words = {
-        "a",
-        "an",
-        "and",
-        "are",
-        "as",
-        "at",
-        "be",
-        "by",
-        "for",
-        "from",
-        "has",
-        "he",
-        "in",
-        "is",
-        "it",
-        "its",
-        "of",
-        "on",
-        "that",
-        "the",
-        "to",
-        "was",
-        "were",
-        "will",
-        "with",
-    }
+    fallback_words = set(ENGLISH_STOP_WORDS)
     try:
         nltk_find("corpora/stopwords")
         words = set(stopwords.words("english"))
         return (words - {"not", "no", "but"}) | TOPIC_STOP_WORDS
     except LookupError:
         logger.warning("NLTK stopwords corpus not available, using fallback stopword set.")
-        return fallback_words | TOPIC_STOP_WORDS
+        return (fallback_words - {"not", "no", "but"}) | TOPIC_STOP_WORDS
 
 
 def wordnet_available() -> bool:

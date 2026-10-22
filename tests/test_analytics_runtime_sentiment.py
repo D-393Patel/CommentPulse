@@ -1,7 +1,9 @@
 import unittest
+import logging
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from analytics_runtime import AnalyticsRuntime
+from analytics_runtime import AnalyticsRuntime, load_stop_words
 
 
 class FakeVectorizer:
@@ -41,6 +43,13 @@ def make_runtime(classes, predictions, feature_counts=None):
 
 
 class SentimentRuntimeTestCase(unittest.TestCase):
+    def test_fallback_stopwords_filter_common_english_fillers_but_keep_negation(self):
+        with patch("analytics_runtime.nltk_find", side_effect=LookupError("missing stopwords")):
+            words = load_stop_words(logging.getLogger(__name__))
+
+        self.assertTrue({"you", "when", "this"}.issubset(words))
+        self.assertNotIn("not", words)
+
     def test_training_class_ids_map_to_extension_labels(self):
         runtime = make_runtime([0, 1, 2], [])
         self.assertEqual(runtime.sentiment_label_map, {0: -1, 1: 0, 2: 1})
