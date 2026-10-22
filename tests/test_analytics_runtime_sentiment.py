@@ -50,6 +50,16 @@ class SentimentRuntimeTestCase(unittest.TestCase):
         self.assertTrue({"you", "when", "this"}.issubset(words))
         self.assertNotIn("not", words)
 
+    def test_topic_keywords_do_not_treat_negation_particles_as_themes(self):
+        runtime = make_runtime([0, 1, 2], [])
+        runtime.stop_words = set()
+        comments = ["not good example", "no useful lesson", "but clear explanation"]
+
+        terms = runtime.top_terms_from_comments(comments)
+
+        self.assertTrue(terms)
+        self.assertTrue(all(not ({"not", "no", "but"} & set(term.split())) for term in terms))
+
     def test_training_class_ids_map_to_extension_labels(self):
         runtime = make_runtime([0, 1, 2], [])
         self.assertEqual(runtime.sentiment_label_map, {0: -1, 1: 0, 2: 1})

@@ -152,7 +152,8 @@ class AnalyticsRuntime:
         processed = [comment for comment in processed if comment]
         if not processed:
             return []
-        tfidf = TfidfVectorizer(stop_words=sorted(self.stop_words), max_features=50, ngram_range=(1, 2))
+        topic_stop_words = sorted(self.stop_words | {"not", "no", "but"})
+        tfidf = TfidfVectorizer(stop_words=topic_stop_words, max_features=50, ngram_range=(1, 2))
         matrix = tfidf.fit_transform(processed)
         scores = matrix.sum(axis=0).A1
         terms = tfidf.get_feature_names_out()
@@ -210,7 +211,8 @@ class AnalyticsRuntime:
         processed = [comment for comment in processed if comment]
         if not processed:
             return []
-        tfidf = TfidfVectorizer(stop_words=sorted(self.stop_words), max_features=50, ngram_range=(1, 2))
+        topic_stop_words = sorted(self.stop_words | {"not", "no", "but"})
+        tfidf = TfidfVectorizer(stop_words=topic_stop_words, max_features=50, ngram_range=(1, 2))
         matrix = tfidf.fit_transform(processed)
         cluster_count = min(3, len(set(processed)))
         kmeans = KMeans(n_clusters=cluster_count, random_state=42, n_init=10)
