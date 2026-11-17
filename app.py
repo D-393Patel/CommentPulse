@@ -19,6 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template_string, request, 
 from flask_cors import CORS
 from requests import Response as RequestsResponse
 from analytics_runtime import AnalyticsRuntime, create_job_handlers
+from ai_likelihood import analyze_ai_likelihood
 
 try:
     import redis
@@ -595,6 +596,27 @@ def validate_sentiment_data(
         if not isinstance(sentiment, int) or sentiment not in {-1, 0, 1}:
             raise ValidationError("Each sentiment must be one of -1, 0, or 1.")
         validated.append({"timestamp": timestamp, "sentiment": sentiment})
+    return validated
+
+
+def validate_ai_likelihood_payload(payload: dict[str, Any], config: AppConfig) -> dict[str, Any]:
+    validated: dict[str, Any] = {}
+    for field_name, max_length in (("title", 300), ("description", 5000), ("channel_name", 300)):
+        value = payload.get(field_name, "")
+        if not isinstance(value, str):
+            raise ValidationError(f"{field_name} must be a string.")
+        validated[field_name] = value.strip()[:max_length]
+
+    comments = payload.get("comments", [])
+    if not isinstance(comments, list):
+        raise ValidationError("comments must be a list.")
+    if len(comments) > config.max_comments_per_request:
+        raise ValidationError(f"comments exceeds MAX_COMMENTS_PER_REQUEST={config.max_comments_per_request}.", 413)
+    if any(not isinstance(comment, str) for comment in comments):
+        raise ValidationError("Each comment must be a string.")
+    validated["comments"] = [comment.strip()[: config.max_comment_length] for comment in comments if comment.strip()]
+    if not any((validated["title"], validated["description"], validated["channel_name"], validated["comments"])):
+        raise ValidationError("Provide at least one public video detail or comment.")
     return validated
 
 
@@ -1645,6 +1667,12 @@ This helped me understand the concept much faster."></textarea>
         payload = parse_json_body()
         comments = validate_comments(payload.get("comments"), config)
         return jsonify({"insights": ensure_runtime().generate_local_insights(comments)})
+
+    @app.route("/ai-likelihood", methods=["POST"])
+    def ai_likelihood() -> Response:
+        """Return an explainable AI-content likelihood estimate from public text."""
+        payload = validate_ai_likelihood_payload(parse_json_body(), config)
+        return jsonify(analyze_ai_likelihood(payload))
 
     @app.route("/generate_trend_graph", methods=["POST"])
     def generate_trend_graph() -> Response:

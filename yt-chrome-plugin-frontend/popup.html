@@ -233,6 +233,12 @@
       line-height:1.4;
     }
 
+    .likelihood-row{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+    .likelihood-value{color:#facc15;font-size:22px;font-weight:700}
+    .likelihood-score{color:#94a3b8;font-size:12px}
+    .reason-list{padding-left:17px;color:#cbd5e1;font-size:12px;line-height:1.45}
+    .disclaimer{margin-top:10px;color:#94a3b8;font-size:11px;line-height:1.4}
+
   </style>
 </head>
 
@@ -295,6 +301,13 @@
 <div class="card">
   <div class="section-title">AI Insights</div>
   <div id="aiInsights" class="summary">Generating summary...</div>
+</div>
+
+<div class="card">
+  <div class="section-title">AI-content likelihood</div>
+  <div class="likelihood-row"><div id="aiLikelihoodValue" class="likelihood-value">Checking…</div><div id="aiLikelihoodScore" class="likelihood-score"></div></div>
+  <ul id="aiLikelihoodReasons" class="reason-list"></ul>
+  <div id="aiLikelihoodDisclaimer" class="disclaimer">Estimate only — not proof of AI generation.</div>
 </div>
 
 <div class="card">

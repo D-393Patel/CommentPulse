@@ -45,6 +45,27 @@ class AppTestCase(unittest.TestCase):
         self.assertEqual(payload["error"]["status_code"], 400)
         self.assertIn("request_id", payload["error"])
 
+    def test_ai_likelihood_is_explainable_and_conservative(self):
+        response = self.client.post(
+            "/ai-likelihood",
+            json={
+                "title": "AI generated deepfake video",
+                "description": "This video uses a synthetic voice.",
+                "channel_name": "Demo Channel",
+                "comments": ["This sounds like an AI voice", "Definitely AI generated"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["likelihood"], "Medium")
+        self.assertGreaterEqual(payload["score"], 20)
+        self.assertTrue(payload["reasons"])
+        self.assertIn("not proof", payload["disclaimer"])
+
+    def test_ai_likelihood_rejects_empty_payload(self):
+        response = self.client.post("/ai-likelihood", json={})
+        self.assertEqual(response.status_code, 400)
+
     def test_insights_job_completes_with_local_summary(self):
         payload = {
             "comments": [

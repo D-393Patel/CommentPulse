@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "YouTube Sentiment Insights",
-  "version": "1.0.4",
-  "description": "Analyze sentiment and themes in comments on the active YouTube video.",
+  "version": "1.0.5",
+  "description": "Analyze YouTube comment sentiment, themes, and explainable AI-content likelihood signals.",
   "action": {
     "default_popup": "popup.html"
   },

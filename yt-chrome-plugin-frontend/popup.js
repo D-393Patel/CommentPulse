@@ -1,4 +1,4 @@
-console.log("Comment Insights popup.js v1.0.4 loaded");
+console.log("Comment Insights popup.js v1.0.5 loaded");
 document.addEventListener("DOMContentLoaded", init);
 
 const API_CANDIDATES = [
@@ -18,6 +18,7 @@ let predictions = [];
 let apiBaseUrl = API_CANDIDATES[0];
 let analyticsBusy = false;
 let settingsFormBound = false;
+let videoMetadata = {};
 
 async function init() {
   document.getElementById("retryAnalysisButton").hidden = true;
@@ -38,6 +39,7 @@ async function init() {
 
     setLoadingMessage("Loading comments...");
     comments = sanitizeComments(await fetchComments());
+    videoMetadata = await extractVideoMetadata();
 
     if (!Array.isArray(comments) || comments.length === 0) {
       setLoadingMessage("No comments found");
@@ -55,6 +57,7 @@ async function init() {
     renderStats();
     renderComments();
 
+    await loadAiLikelihood();
     await loadAnalytics();
     document.getElementById("retryAnalysisButton").hidden = true;
   } catch (err) {
@@ -422,6 +425,22 @@ async function extractCommentsFromPage() {
   return sanitizeComments(results?.[0]?.result || []);
 }
 
+async function extractVideoMetadata() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: () => {
+      const read = (selector) => document.querySelector(selector)?.textContent?.replace(/\s+/g, " ").trim() || "";
+      const meta = (name) => document.querySelector(`meta[name="${name}"], meta[property="${name}"]`)?.content?.trim() || "";
+      const title = read("h1 yt-formatted-string") || meta("og:title") || document.title.replace(/ - YouTube$/, "");
+      const description = read("ytd-watch-metadata #description-inline-expander") || read("ytd-expander #description") || meta("og:description");
+      const channelName = read("ytd-channel-name #text") || read("ytd-reel-player-header-renderer #channel-name");
+      return { title: title.slice(0, 300), description: description.slice(0, 5000), channel_name: channelName.slice(0, 300) };
+    },
+  });
+  return results?.[0]?.result || {};
+}
+
 async function fetchPredictions(commentItems) {
   const response = await fetchWithTimeout(`${apiBaseUrl}/predict_with_timestamps`, {
     method: "POST",
@@ -509,6 +528,40 @@ function renderComments() {
 
     list.appendChild(li);
   });
+}
+
+function renderAiLikelihood(data) {
+  document.getElementById("aiLikelihoodValue").textContent = `${data.likelihood || "Unknown"} likelihood`;
+  document.getElementById("aiLikelihoodScore").textContent = `${Number(data.score) || 0}/100 · ${data.confidence || "Low"} confidence`;
+  document.getElementById("aiLikelihoodDisclaimer").textContent = data.disclaimer || "Estimate only — not proof of AI generation.";
+  const reasons = document.getElementById("aiLikelihoodReasons");
+  reasons.replaceChildren();
+  (Array.isArray(data.reasons) ? data.reasons : []).forEach((reason) => {
+    const item = document.createElement("li");
+    item.textContent = reason;
+    reasons.appendChild(item);
+  });
+}
+
+async function loadAiLikelihood() {
+  try {
+    const response = await fetchWithTimeout(`${apiBaseUrl}/ai-likelihood`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...videoMetadata, comments: comments.map((comment) => comment.text) }),
+    }, READY_TIMEOUT_MS);
+    const data = await readJsonResponse(response, "Could not read the AI-likelihood estimate.");
+    if (!response.ok) throw new Error(data?.error?.message || "AI-likelihood request failed");
+    renderAiLikelihood(data);
+    return true;
+  } catch (error) {
+    console.error("AI likelihood error:", error);
+    document.getElementById("aiLikelihoodValue").textContent = "Unavailable";
+    document.getElementById("aiLikelihoodScore").textContent = "";
+    document.getElementById("aiLikelihoodReasons").replaceChildren();
+    document.getElementById("aiLikelihoodDisclaimer").textContent = "Could not generate an estimate for this video. Try again after the service is available.";
+    return false;
+  }
 }
 
 function formatTopicLabel(topic) {
